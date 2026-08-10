@@ -33,6 +33,17 @@ constexpr UInt32 kDMAAlignment = 16;
 constexpr UInt32 kTXPacketDescriptorSize = 48;
 constexpr UInt16 kBeaconQueueOwn = 1U << 15;
 constexpr UInt8 kBeaconQueueSelect = 16;
+constexpr IOByteCount kRegisterPCICtrl3 = 0x0303;
+constexpr IOByteCount kRegisterBeaconRingBase = 0x0308;
+constexpr IOByteCount kRegisterBeaconWork = 0x0383;
+constexpr IOByteCount kRegisterRWPTRClear = 0x039c;
+constexpr UInt32 kTXRingDescriptorSize = 16;
+constexpr UInt32 kRXRingDescriptorSize = 8;
+constexpr UInt32 kDefaultTXRingEntries = 128;
+constexpr UInt32 kBestEffortTXRingEntries = 256;
+constexpr UInt32 kRXRingEntries = 512;
+constexpr UInt32 kRXBufferSize = 11454 + 24;
+constexpr size_t kTRXResourceCount = 9;
 
 extern "C" const UInt8 firmwareSectionStart[]
     __asm("section$start$__DATA_CONST$__firmware");
@@ -210,8 +221,122 @@ struct PCITXBufferElement {
     UInt32 address;
 } __attribute__((packed));
 
+struct QueueRegisterSnapshot {
+    UInt8 pciControl3;
+    UInt8 beaconWork;
+    UInt16 reserved;
+    UInt32 beaconRingBase;
+    UInt32 rwPointerClear;
+};
+
+struct QueueProjectedCommand {
+    UInt8 phase;
+    UInt8 width;
+    UInt16 offset;
+    UInt32 original;
+    UInt32 mask;
+    UInt32 value;
+    UInt32 projected;
+};
+
+struct TRXResourcePlan {
+    UInt32 type;
+    UInt32 queue;
+    UInt32 entries;
+    UInt32 descriptorSize;
+    UInt32 baseRegister;
+    UInt32 countRegister;
+    UInt32 indexRegister;
+    UInt32 ringBytes;
+    UInt32 payloadBytes;
+};
+
 static_assert(sizeof(PCITXBufferElement) == 8,
               "unexpected PCI TX buffer element layout");
+static_assert(sizeof(QueueRegisterSnapshot) == 12,
+              "unexpected queue snapshot layout");
+static_assert(sizeof(QueueProjectedCommand) == 20,
+              "unexpected queue command layout");
+static_assert(sizeof(TRXResourcePlan) == 36,
+              "unexpected TRX resource layout");
+
+constexpr TRXResourcePlan kTRXResources[kTRXResourceCount] = {
+    {0, 0, kDefaultTXRingEntries, kTXRingDescriptorSize,
+     0x0330, 0x038a, 0x03ac, kDefaultTXRingEntries * kTXRingDescriptorSize, 0},
+    {0, 1, kBestEffortTXRingEntries, kTXRingDescriptorSize,
+     0x0328, 0x0388, 0x03a8, kBestEffortTXRingEntries * kTXRingDescriptorSize, 0},
+    {0, 2, kDefaultTXRingEntries, kTXRingDescriptorSize,
+     0x0320, 0x0386, 0x03a4, kDefaultTXRingEntries * kTXRingDescriptorSize, 0},
+    {0, 3, kDefaultTXRingEntries, kTXRingDescriptorSize,
+     0x0318, 0x0384, 0x03a0, kDefaultTXRingEntries * kTXRingDescriptorSize, 0},
+    {0, 4, 1, kTXRingDescriptorSize,
+     0x0308, 0, 0, kTXRingDescriptorSize, 0},
+    {0, 5, kDefaultTXRingEntries, kTXRingDescriptorSize,
+     0x0310, 0x0380, 0x03b0, kDefaultTXRingEntries * kTXRingDescriptorSize, 0},
+    {0, 6, kDefaultTXRingEntries, kTXRingDescriptorSize,
+     0x0340, 0x038c, 0x03b8, kDefaultTXRingEntries * kTXRingDescriptorSize, 0},
+    {0, 7, kDefaultTXRingEntries, kTXRingDescriptorSize,
+     0x1320, 0x1328, 0x132c, kDefaultTXRingEntries * kTXRingDescriptorSize, 0},
+    {1, 0, kRXRingEntries, kRXRingDescriptorSize,
+     0x0338, 0x0382, 0x03b4, kRXRingEntries * kRXRingDescriptorSize,
+     kRXRingEntries * kRXBufferSize},
+};
+
+bool validateTRXResourcePlan(UInt32 &txRingBytes,
+                             UInt32 &rxRingBytes,
+                             UInt64 &rxPayloadBytes,
+                             UInt8 &deviceConfiguredCount)
+{
+    txRingBytes = 0;
+    rxRingBytes = 0;
+    rxPayloadBytes = 0;
+    deviceConfiguredCount = 0;
+
+    for (size_t index = 0; index < kTRXResourceCount; index++) {
+        const TRXResourcePlan &resource = kTRXResources[index];
+        if (resource.entries == 0 || resource.entries > 0x0fffU ||
+            resource.ringBytes != resource.entries * resource.descriptorSize)
+            return false;
+
+        if (resource.type == 0) {
+            if (resource.queue > 7 ||
+                resource.descriptorSize != kTXRingDescriptorSize ||
+                resource.payloadBytes != 0 || resource.baseRegister == 0)
+                return false;
+            txRingBytes += resource.ringBytes;
+        } else {
+            if (resource.type != 1 || resource.queue > 1 ||
+                resource.descriptorSize != kRXRingDescriptorSize ||
+                resource.payloadBytes != resource.entries * kRXBufferSize)
+                return false;
+            rxRingBytes += resource.ringBytes;
+            rxPayloadBytes += resource.payloadBytes;
+        }
+
+        if (resource.baseRegister != 0)
+            deviceConfiguredCount++;
+
+        for (size_t otherIndex = index + 1;
+             otherIndex < kTRXResourceCount; otherIndex++) {
+            const TRXResourcePlan &other = kTRXResources[otherIndex];
+            const UInt32 registers[] = {
+                resource.baseRegister, resource.countRegister,
+                resource.indexRegister,
+            };
+            const UInt32 otherRegisters[] = {
+                other.baseRegister, other.countRegister, other.indexRegister,
+            };
+            for (UInt8 left = 0; left < 3; left++)
+                for (UInt8 right = 0; right < 3; right++)
+                    if (registers[left] != 0 &&
+                        registers[left] == otherRegisters[right])
+                        return false;
+        }
+    }
+
+    return txRingBytes == 16400 && rxRingBytes == 4096 &&
+           rxPayloadBytes == 5876736 && deviceConfiguredCount == 9;
+}
 
 bool prepareSingleSegmentDMA(UInt32 length, PreparedDMA &dma)
 {
@@ -1251,6 +1376,10 @@ bool RTL8821CEProbe::start(IOService *provider)
     UInt8 experimentMacAfter = 0xffU;
     PreSystemSnapshot preSystem = {};
     bool preSystemStable = false;
+    QueueRegisterSnapshot queueSnapshot = {};
+    QueueProjectedCommand queuePlan[4] = {};
+    bool queueSnapshotStable = false;
+    bool queuePlanValid = false;
 
     if (!map) {
         IOLog("RTL8821CEProbe: failed to map BAR2\n");
@@ -1378,12 +1507,61 @@ bool RTL8821CEProbe::start(IOService *provider)
                 };
                 preSystemStable = equalPreSystemSnapshot(preSystem, repeated);
 
+                queueSnapshot = {
+                    base[kRegisterPCICtrl3],
+                    base[kRegisterBeaconWork],
+                    0,
+                    OSReadLittleInt32(base, kRegisterBeaconRingBase),
+                    OSReadLittleInt32(base, kRegisterRWPTRClear),
+                };
+                IODelay(50);
+                const QueueRegisterSnapshot queueRepeated = {
+                    base[kRegisterPCICtrl3],
+                    base[kRegisterBeaconWork],
+                    0,
+                    OSReadLittleInt32(base, kRegisterBeaconRingBase),
+                    OSReadLittleInt32(base, kRegisterRWPTRClear),
+                };
+                queueSnapshotStable =
+                    queueSnapshot.pciControl3 == queueRepeated.pciControl3 &&
+                    queueSnapshot.beaconWork == queueRepeated.beaconWork &&
+                    queueSnapshot.beaconRingBase == queueRepeated.beaconRingBase &&
+                    queueSnapshot.rwPointerClear == queueRepeated.rwPointerClear;
+
+                const UInt32 projectedPCIControl3 =
+                    queueSnapshot.pciControl3 | 0xf7U;
+                const UInt32 projectedBeaconWork =
+                    queueSnapshot.beaconWork | 0x10U;
+                queuePlan[0] = {
+                    0, 1, static_cast<UInt16>(kRegisterPCICtrl3),
+                    queueSnapshot.pciControl3, 0x000000f7U, 0x000000f7U,
+                    projectedPCIControl3,
+                };
+                queuePlan[1] = {
+                    1, 4, static_cast<UInt16>(kRegisterBeaconRingBase),
+                    queueSnapshot.beaconRingBase, 0xffffffffU,
+                    dmaTemplate.descriptorAddress, dmaTemplate.descriptorAddress,
+                };
+                queuePlan[2] = {
+                    2, 4, static_cast<UInt16>(kRegisterRWPTRClear),
+                    queueSnapshot.rwPointerClear, 0xffffffffU, 0xffffffffU,
+                    0xffffffffU,
+                };
+                queuePlan[3] = {
+                    3, 1, static_cast<UInt16>(kRegisterBeaconWork),
+                    queueSnapshot.beaconWork, 0x00000010U, 0x00000010U,
+                    projectedBeaconWork,
+                };
+                queuePlanValid = queueSnapshotStable && dmaTemplateValid &&
+                    dmaTemplate.descriptorAddress != 0 &&
+                    (dmaTemplate.descriptorAddress & (kDMAAlignment - 1)) == 0;
+
                 mmioValid = sequenceValidated && dryRunPlanValidated &&
                             sysCfg1 == sysCfg1Repeat &&
                             sysCfg1 == kExpectedSysCfg1 && cr == 0xeaU &&
                             crRepeat == cr && revision == 0 &&
                             subsystemVendor == 0x10ec && subsystem == 0xc821 &&
-                            preSystemStable && command == 0 &&
+                            preSystemStable && queuePlanValid && command == 0 &&
                             bars[2] == 0xfce00004U && bars[3] == 0 &&
                             preSystem.reservedControl == 0x00 &&
                             preSystem.hciOptionControl == 0x00000435 &&
@@ -1520,6 +1698,58 @@ bool RTL8821CEProbe::start(IOService *provider)
     setProperty("SYS_PWR_CTRLOriginal", preSystem.systemPowerControl, 8);
     setProperty("MCUFW_CTRLOriginal", preSystem.firmwareControl, 16);
     setProperty("RPWMOriginal", preSystem.rpwm, 8);
+    setProperty("QueueConfigurationBaselineReadOnly", true);
+    setProperty("QueueConfigurationSnapshotStable", queueSnapshotStable);
+    setProperty("QueueConfigurationPlanValid", queuePlanValid);
+    setProperty("QueueConfigurationCommandCount", static_cast<UInt64>(4), 8);
+    setProperty("QueueConfigurationExecutionAuthorized", false);
+    setProperty("QueueConfigurationExecutionAttempted", false);
+    setProperty("QueueConfigurationBlocker",
+                "GlobalRWPTRClearRequiresCompleteTRXRings");
+    setProperty("QueueConfigurationRequiresBusMastering", true);
+    setProperty("QueueConfigurationRequiresPoweredMAC", true);
+    setProperty("QueueConfigurationGlobalResetAffectsAllQueues", true);
+    setProperty("QueuePCICtrl3Original", queueSnapshot.pciControl3, 8);
+    setProperty("QueueBeaconRingBaseOriginal", queueSnapshot.beaconRingBase, 32);
+    setProperty("QueueBeaconRingBaseProjected", dmaTemplate.descriptorAddress, 32);
+    setProperty("QueueRWPTRClearOriginal", queueSnapshot.rwPointerClear, 32);
+    setProperty("QueueRWPTRClearProjected", static_cast<UInt64>(0xffffffffU), 32);
+    setProperty("QueueBeaconWorkOriginal", queueSnapshot.beaconWork, 8);
+    setProperty("QueueBeaconWorkProjected",
+                static_cast<UInt64>(queueSnapshot.beaconWork | 0x10U), 8);
+
+    UInt32 trxTXRingBytes = 0;
+    UInt32 trxRXRingBytes = 0;
+    UInt64 trxRXPayloadBytes = 0;
+    UInt8 trxDeviceConfiguredCount = 0;
+    const bool trxResourcePlanValid = validateTRXResourcePlan(
+        trxTXRingBytes, trxRXRingBytes, trxRXPayloadBytes,
+        trxDeviceConfiguredCount);
+    setProperty("TRXResourcePlanValid", trxResourcePlanValid);
+    setProperty("TRXResourceCount", static_cast<UInt64>(kTRXResourceCount), 8);
+    setProperty("TRXTXQueueCount", static_cast<UInt64>(8), 8);
+    setProperty("TRXRXQueueCount", static_cast<UInt64>(1), 8);
+    setProperty("TRXDeviceConfiguredRingCount", trxDeviceConfiguredCount, 8);
+    setProperty("TRXUnconfiguredRingCount", static_cast<UInt64>(0), 8);
+    setProperty("TRXHardwareRequiredRingCount", static_cast<UInt64>(9), 8);
+    setProperty("TRXUpstreamAllocatedRXQueueCount", static_cast<UInt64>(2), 8);
+    setProperty("TRXRXC2HDeclaredByUpstream", true);
+    setProperty("TRXRXC2HAllocatedByGenericLoop", true);
+    setProperty("TRXRXC2HDeviceConfigured", false);
+    setProperty("TRXRXC2HRuntimeConsumed", false);
+    setProperty("TRXRXC2HTransportViaMPDU", true);
+    setProperty("TRXRXC2HClassification", "DeadGenericAllocationArtifact");
+    setProperty("TRXTXRingBytes", trxTXRingBytes, 32);
+    setProperty("TRXRXRingBytes", trxRXRingBytes, 32);
+    setProperty("TRXRXPayloadBytes", trxRXPayloadBytes, 64);
+    setProperty("TRXCoherentRingBytes",
+                static_cast<UInt64>(trxTXRingBytes) + trxRXRingBytes, 64);
+    setProperty("TRXTotalMappedBytes",
+                static_cast<UInt64>(trxTXRingBytes) + trxRXRingBytes +
+                    trxRXPayloadBytes, 64);
+    setProperty("TRXGlobalPointerResetSafe", false);
+    setProperty("TRXAllocationAttempted", false);
+    setProperty("TRXResourceBlocker", "HardwareRequiredTRXResourcesNotAllocated");
 
     OSData *snapshotData = OSData::withBytes(snapshots, sizeof(snapshots));
     if (snapshotData) {
@@ -1553,6 +1783,26 @@ bool RTL8821CEProbe::start(IOService *provider)
     if (firmwarePlanData) {
         setProperty("FirmwareTransferPlan", firmwarePlanData);
         firmwarePlanData->release();
+    }
+
+    OSData *queueSnapshotData = OSData::withBytes(
+        &queueSnapshot, sizeof(queueSnapshot));
+    if (queueSnapshotData) {
+        setProperty("QueueConfigurationSnapshot", queueSnapshotData);
+        queueSnapshotData->release();
+    }
+
+    OSData *queuePlanData = OSData::withBytes(queuePlan, sizeof(queuePlan));
+    if (queuePlanData) {
+        setProperty("QueueConfigurationPlan", queuePlanData);
+        queuePlanData->release();
+    }
+
+    OSData *trxResourceData = OSData::withBytes(
+        kTRXResources, sizeof(kTRXResources));
+    if (trxResourceData) {
+        setProperty("TRXResourcePlan", trxResourceData);
+        trxResourceData->release();
     }
 
     IOLog("RTL8821CEProbe: power FSM dry-run planned %u commands in 5 phases; %u poll-baseline samples with %u transitions; experiment %s, result %s; FLR %s; SYS_CFG1 0x%08x cut %u vendor %u RF %s; initial CR 0x%02x; PCI command restored to 0x%04x\n",

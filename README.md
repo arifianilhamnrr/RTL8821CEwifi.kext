@@ -73,6 +73,27 @@ after both mappings and the serialized template pass validation. A failed start
 and `stop()` both complete, detach, and release every mapping in reverse order.
 The persistent ring remains software-only: queue base/index/doorbell registers,
 bus mastering, and device DMA configuration are still untouched.
+
+Version 0.8.6 reads stable baselines for the PCI control byte, beacon ring base,
+global ring-pointer clear register, and beacon work flag. It serializes the exact
+four-command queue setup projection without executing it. The upstream global
+pointer reset affects every TX/RX queue, so execution remains blocked until all
+TRX rings exist; configuring only the beacon ring would not be contained.
+
+Version 0.8.7 serializes the complete upstream PCI resource layout: eight TX
+rings and two RX rings, their descriptor counts/sizes, base/count/index
+registers, and RX payload requirements. It validates unique registers, 12-bit
+entry limits, and exact memory totals without allocating them. Upstream allocates
+an RX C2H ring but only programs RX MPDU, so the roughly 11.8 MB allocation and
+C2H ownership semantics remain blockers before a global pointer reset is safe.
+
+Version 0.8.8 distinguishes that upstream allocation inventory from the hardware
+resource layout. The second RX C2H ring is allocated only by a generic loop: it
+has no registers, consumer, refill, or index advancement. C2H packets instead
+arrive through RX MPDU and are identified by the RX descriptor C2H bit. The
+hardware-required planner therefore contains eight TX rings and one RX MPDU ring
+(nine records, 324 bytes), while retaining explicit audit properties for the dead
+C2H allocation artifact. Hardware-required allocation is still not attempted.
 No reset is initiated. BAR2 remains read-only, the MAC must remain off, and the
 exact PCI command must be restored before the service is published. It does not
 run the RTL8821C power FSM, touch firmware/RF/PCI-DMA controls, probe BAR sizes,
