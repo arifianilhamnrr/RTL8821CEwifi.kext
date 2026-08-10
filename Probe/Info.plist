@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>en</string>
+	<key>CFBundleExecutable</key>
+	<string>RTL8821CEProbe</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.crangel.RTL8821CEProbe</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>RTL8821CEProbe</string>
+	<key>CFBundlePackageType</key>
+	<string>KEXT</string>
+	<key>CFBundleShortVersionString</key>
+	<string>0.8.5</string>
+	<key>CFBundleSignature</key>
+	<string>????</string>
+	<key>CFBundleVersion</key>
+	<string>0.8.5</string>
+	<key>IOKitPersonalities</key>
+	<dict>
+		<key>RTL8821CE Read-Only Probe</key>
+		<dict>
+			<key>CFBundleIdentifier</key>
+			<string>com.crangel.RTL8821CEProbe</string>
+			<key>IOClass</key>
+			<string>RTL8821CEProbe</string>
+			<key>IOPCIMatch</key>
+			<string>0xc82110ec</string>
+			<key>IOProbeScore</key>
+			<integer>100</integer>
+			<key>IOProviderClass</key>
+			<string>IOPCIDevice</string>
+		</dict>
+	</dict>
+	<key>OSBundleLibraries</key>
+	<dict>
+		<key>com.apple.iokit.IOPCIFamily</key>
+		<string>2.9</string>
+		<key>com.apple.kpi.iokit</key>
+		<string>20.0.0</string>
+		<key>com.apple.kpi.libkern</key>
+		<string>20.0.0</string>
+	</dict>
+	<key>OSBundleCompatibleVersion</key>
+	<string>0.1.0</string>
+	<key>OSBundleRequired</key>
+	<string>Local-Root</string>
+</dict>
+</plist>
