@@ -286,6 +286,208 @@ This v0.14.0 scaffold is not armed or deployed. BAR2 remains read-only in the
 current build and the executor cannot run regardless of boot arguments. A future
 enablement change requires another review and an isolated OC-TEST deployment;
 failure after the first write still requires cold shutdown with power removal.
+
+Version 0.15.0 is a read-only runtime diagnostic follow-up. The v0.14.0 binary
+loaded successfully on OC-TEST but returned from `start()` before publishing its
+child service, so its service-local properties were unavailable. Version 0.15.0
+publishes a versioned 64-bit failure mask and selected validator results on the
+provider `IOPCIDevice` before any failed-start return. Individual bits distinguish
+BAR mapping and decode, power-plan validation, chip and MAC identity, pre-system
+stability and expected values, queue/template planning, firmware-register
+stability, PCI command restoration, and TRX post-checks. The provider telemetry
+survives child attach failure and therefore identifies the exact guard on the
+next boot. Both power build gates remain `false`; this change adds properties
+only and does not authorize power, BME, DMA, firmware, interrupt, retry, or
+power-off execution.
+
+Versions 0.16.0 and 0.17.0 completed the read-only diagnosis. Runtime telemetry
+showed that the cold-boot `SYS_CFG1` status bit and several mutable power-path
+registers can change while all samples remain stable, so identity validation now
+masks only that status bit and treats mutable values as observations rather than
+immutable straps. The symbolic interpreter's positive cold-removal fixture now
+starts in `ColdRemovalRequired`, producing all 330 traces and seven expected
+negative controls. Version 0.17.0 published successfully with a zero diagnostic
+failure mask, restored PCI command zero, bus mastering disabled, MAC off, and no
+power attempt.
+
+Version 0.18.0 is the final read-only preflight batch. It corrects two firmware-
+stage planner validators: the `0x022c` firmware setup record is backup-before,
+not a synthetic write restore, and a saved-register restore mask may be a full-
+width superset of the mutation mask. An aggregate `PowerExecutorV2PreflightReady`
+property now requires every lifecycle, publication, rollback, journal, mapping,
+firmware, interrupt, identity, and runtime containment check simultaneously.
+Preflight readiness is explicitly telemetry, never execution authorization; in
+the v0.18.0 validation build both power gates remain `false` and no power boot
+arguments are installed.
+
+Version 0.19.0 is the isolated first power-on experiment build. Only the version-
+two power executor compile-time gate is enabled; the legacy executor remains
+disabled. Invocation additionally requires the OC-TEST marker, dedicated enable
+and exact confirmation boot arguments, every static lifecycle/firmware/DMA/
+rollback/journal/interpreter validator, and the complete runtime MMIO identity
+baseline. It performs only the twenty-six-step pre-system and power-on contract
+with write-ahead journaling, masked readback verification, and bounded polls.
+Bus mastering, queue programming, DMA publication, firmware upload, interrupts,
+retry, and automatic power-off remain forbidden. Any result after the first
+intent is quarantined and requires cold shutdown with physical power removal.
+
+The v0.19.0 OC-TEST experiment completed all twenty-four writes and both bounded
+polls with fifty-two journal records, no failed step, no retry, and no timeout.
+MAC control changed from off-state `0xea` to `0x00`; PCI command was restored to
+zero and bus mastering, DMA, firmware, and interrupts remained disabled. No panic,
+IOMMU, or DMAR fault was observed. OC-TEST power arguments were removed immediately
+after collecting the result so subsequent boots cannot repeat the sequence.
+
+Version 0.20.0 returns the power executor build gate to `false` and adds the next
+offline-only contract: a fifteen-register read-only snapshot collected only after
+a successful power-on result. Two samples cover system function/power state, MCU
+firmware control, MAC control, reserved-page/FIFO state, PCI queue control,
+platform/IDDMA enable, and IDDMA status. No post-power setup write, queue address,
+BME, DMA, firmware upload, interrupt, retry, or power-off is introduced.
+
+Version 0.21.0 serializes the five upstream post-power system operations as a
+separate offline execution contract. The first three operations enable 3081
+platform reset/DDMA support, chip-specific system-function bits, and the required
+`CR_EXT+3` low nibble; two conditional operations disable boot-from-flash state
+when advertised. Seventeen synthetic paths cover five successes, five pre-intent
+rejections, five unknown-effect quarantines, and two conditional skips. Every
+step requires an already powered MAC, explicitly forbids BME, and prohibits
+rollback, retry, nominal power-off, DMA, firmware, or interrupt execution. This
+planner remains unauthorized and unattempted.
+
+Version 0.22.0 is a snapshot-only runtime build with a separate OC-TEST marker,
+enable argument, and confirmation. The power executor gate remains `false` and
+BAR2 is mapped read-only. If MAC control is already powered and stable, it records
+the fifteen-register post-power snapshot without journaling or writes; if reboot
+returns the card to `0xea`, it reports the snapshot path ineligible and still does
+nothing. Power and snapshot arming are mutually exclusive, preventing an
+already-powered card from receiving the power sequence twice.
+
+The v0.22.0 OC-TEST boot confirmed that reboot returns MAC control to `0xea`.
+Version 0.23.0 therefore re-enables only the previously successful journaled
+power executor and immediately collects the same fifteen-register read-only
+snapshot after all twenty-four writes and both polls complete in that boot. It
+also treats `SYS_CFG1[1:0]` and `PAD_CTRL1[29:28]` as mutable status bits observed
+across cold boots while preserving every other identity and pre-system guard.
+Post-power setup writes, BME, queue programming, DMA, firmware upload, interrupts,
+retry, and automatic power-off remain forbidden.
+
+Version 0.24.0 adds a separately armed post-power executor after the proven
+power-on and stable fifteen-register snapshot. It journals all five upstream
+system-configuration records before acting, verifies every masked write, and
+stops permanently on the first mismatch. The observed firmware-control snapshot
+does not advertise boot from flash, so the two flash-disable records are expected
+to be journaled conditional skips; only the platform/DDMA enable, system-function,
+and `CR_EXT+3` records write hardware. BME, queue addresses, DMA submission,
+firmware upload, CPU release, interrupts, retry, and automatic power-off remain
+forbidden.
+
+Version 0.25.0 batches the host-only prerequisite for queue and firmware work.
+All nine descriptor rings and 512 RX payload mappings are allocated, validated,
+and retained before BAR mapping or any optional power transition. The existing
+helper also validates all 1,025 zero TX descriptors, materializes and validates
+all 512 RX descriptors, copies the beacon template with OWN clear, and builds the
+dynamic 21-record device plan from the retained IOVM addresses. PCI command must
+remain exactly unchanged with BME clear across allocation. This runtime remains
+unarmed and performs no queue/MMIO write, synchronization, BME change, DMA,
+firmware upload, IDDMA, CPU release, or interrupt registration.
+
+Version 0.26.0 adds a separately armed full 21-record TRX publication executor.
+After the proven power and post-power stages, it synchronizes all nine descriptor
+rings Out, applies the exact count-before-base ordering, resets all ring pointers
+and H2C indices, and enables the modeled TRX DMA-control bits while PCI BME remains
+clear. Every record has write-ahead intent, masked readback verification, and a
+BME check before and after its MMIO write. The 512 RX payload mappings are retained
+but not synchronized because they contain no CPU-produced device input. BME,
+beacon OWN/doorbell, firmware upload, IDDMA, CPU release, and interrupts remain
+forbidden.
+
+Version 0.27.0 narrows the queue verifier correction to the global TX descriptor
+read/write-pointer clear command at `0x039c`. Hardware accepted the v0.26 write
+of `0xffffffff` but immediately read back zero, matching command-register
+self-clear behavior. The v0.27 executor therefore requires a zero terminal
+readback only for plan operation 3 at that exact offset, width, mask, and value;
+all other records retain strict masked projected-value verification. Telemetry
+counts accepted command readbacks, and a new `queue-v2` confirmation token keeps
+this contract distinct from v0.26. Containment remains unchanged: BME, beacon
+OWN/doorbell, firmware upload, IDDMA, CPU release, and interrupts are forbidden.
+
+Version 0.28.0 incorporates the next runtime observation without broadening the
+verifier generally. The upstream `0x1330` H2C queue CSR write explicitly requests
+host-index and hardware-index clear with bits 16 and 8; v0.27 observed those bits
+read back zero immediately. The executor now accepts zero only for that exact
+operation-4 tuple and the previously proven `0x039c` tuple. A host-side contract
+validator requires exactly those two command records and requires the final
+operation-5 `0x0300` DMA-control record to remain strict. Separate counters prove
+each command readback, and final DMA-control telemetry captures its observed
+value. A new `queue-v3` token prevents older queue contracts from arming this
+path. BME, descriptor ownership, firmware transport, and interrupts remain
+forbidden.
+
+Version 0.29.0 batches the complete reversible pre-firmware transport transaction
+behind a new `fw-setup-v1` token. After the proven power, post-power, and 21-record
+queue sequence, it stops the WLAN CPU and MCU I/O interface, backs up the six
+upstream temporary download registers, applies HIQ/TXDMA/page/beacon setup,
+performs the platform and CPU-clock reset sequence, enters firmware-download
+mode, verifies DDMA channel 0 is idle, exits firmware-download mode, and restores
+the six temporary registers in reverse order. All 21 steps have write-ahead and
+terminal journal records and enforce BME clear before and after every mutation.
+The upstream synthetic restore semantics are explicit: H2CQ CSR restores to the
+FULL marker and RQPN_CTRL_2 restores to its saved value with LD_RQPN set. A
+successful endpoint intentionally leaves WLAN CPU and MCU I/O disabled. Beacon
+OWN, beacon doorbell, IDDMA source/destination/control writes, firmware-memory
+mutation, CPU release, retry, power-off, and interrupts remain forbidden.
+
+Version 0.30.0 advances that entire 21-step transaction behind a new
+`fw-setup-v2` token. Hardware evidence from 0.29.0 established that
+`RQPN_CTRL_2.BIT_LD_RQPN` is an exact self-clearing load command. Both its setup
+write and synthetic reverse-restore now require terminal readback with bit 31
+clear while every other bit remains strict. The contract validator permits this
+only for the two exact `0x022c` records, separate setup and restore counters must
+each reach one, the DDMA-idle poll must complete, all six reverse restores must
+complete, and final FWDL and RQPN state are audited before success. No firmware
+DMA or additional hardware boundary is enabled by this change.
+
+Version 0.31.0 adds one aggressive, separately armed first-DMEM transaction.
+Only `rtl8821ce-dmem-v1=1` with exact confirmation `0x3100c821` and the OC-TEST
+marker can select it; the older `fw-setup-v2` token is explicitly exclusive and
+cannot trigger firmware transport. The executor inserts the transaction after
+setup step 13 confirms DDMA channel 0 idle and before step 14 clears FWDL mode,
+matching the upstream requirement that IDDMA firmware download occur while FWDL
+is enabled. It strictly validates only plan record section 0, chunk 0, first
+chunk, 4096 bytes, destination `0x200000`, source `0x18780030`, and control
+`OWN|checksum-enable|4096` against the embedded first DMEM payload and prepared
+descriptor.
+
+The staging mapping is synchronized Out; retained beacon ring resource 4 gets
+OWN as its final host mutation, is synchronized Out, and is release-fenced before
+temporarily enabling exact PCI BME with memory decode preserved. The already
+programmed beacon base is used, `0x0383[4]` is rung once, and completion is bounded
+on the beacon descriptor OWN bit clearing after In synchronization. Upstream does
+not define the doorbell bit as a completion or self-clear contract, so its
+readback is captured but not required to clear. The exact PCI command is restored
+and read back before IDDMA. The executor then pre-polls DDMA OWN clear, resets
+checksum status as upstream does, writes SA/DA/CTRL, polls OWN clear, and captures
+checksum status. It deliberately neither requires a section-final checksum nor
+sets DMEM download/checksum OK bits because seven DMEM chunks remain. On success,
+step 14 clears FWDL and all six reverse restores run. A separate fixed write-ahead
+transport journal and detailed synchronization, poll, PCI-command, doorbell,
+IDDMA, checksum, and hazard properties record the boundary. Any failure after
+OWN, BME, doorbell, or IDDMA fail-stops without retry, nominal power-off, CPU
+release, or interrupts; PCI command restoration is best-effort and an uncertain
+readback is classified as an unknown effect requiring cold power removal.
+
+Version 0.32.0 corrects the beacon completion contract from the exact 0.31.0
+hardware evidence. The beacon doorbell command at `0x0383[4]` was accepted and
+self-cleared (`0x12` to `0x02`) while the host descriptor OWN bit was not written
+back during 1000 coherent In polls. The new exclusive `dmem-v2` token therefore
+requires the exact doorbell bit to clear and records descriptor OWN as a
+non-writeback ownership publication marker, matching the upstream path which
+never waits for descriptor writeback. All staging/ring synchronization, temporary
+BME enable, exact PCI-command restore, bounded DDMA OWN polls, first 4096-byte
+DMEM IDDMA, checksum capture, FWDL exit, and six reverse restores remain in the
+same one-shot transaction. No retry, CPU release, interrupt, or nominal power-off
+is added.
 No reset is initiated. BAR2 remains read-only, the MAC must remain off, and the
 exact PCI command must be restored before the service is published. It does not
 run the RTL8821C power FSM, touch firmware/RF/PCI-DMA controls, probe BAR sizes,

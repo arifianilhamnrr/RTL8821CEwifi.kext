@@ -15,6 +15,7 @@ constexpr IOByteCount kRegisterSysCfg1 = 0x00f0;
 constexpr IOByteCount kRegisterCr = 0x0100;
 constexpr UInt16 kCommandDecodeMask = kIOPCICommandMemorySpace | kIOPCICommandBusMaster;
 constexpr UInt32 kExpectedSysCfg1 = 0x00494d39;
+constexpr UInt32 kSysCfg1IdentityMask = 0xfffffffcU;
 constexpr UInt32 kPowerPollIntervalMicroseconds = 50;
 constexpr UInt32 kPowerPollIterations = 20000;
 constexpr UInt8 kPowerPollMaximumAttempts = 2;
@@ -23,10 +24,34 @@ constexpr UInt32 kBaselineSampleIntervalMicroseconds = 50;
 constexpr UInt32 kPowerExperimentConfirmation = 0x8821c821U;
 constexpr bool kPowerExperimentBuildEnabled = false;
 constexpr UInt32 kPowerExecutorContractConfirmation = 0x1400c821U;
-constexpr bool kPowerExecutorBuildEnabled = false;
+constexpr bool kPowerExecutorBuildEnabled = true;
+constexpr UInt32 kPostPowerSnapshotConfirmation = 0x2200c821U;
+constexpr bool kPostPowerSnapshotBuildEnabled = true;
+constexpr UInt32 kPostPowerExecutorConfirmation = 0x2400c821U;
+constexpr bool kPostPowerExecutorBuildEnabled = true;
+constexpr UInt32 kQueueExecutorConfirmation = 0x2800c821U;
+constexpr bool kQueueExecutorBuildEnabled = true;
+constexpr UInt32 kFirmwareSetupExecutorConfirmation = 0x3000c821U;
+constexpr bool kFirmwareSetupExecutorBuildEnabled = true;
+constexpr UInt32 kFirstDMEMExecutorConfirmation = 0x3200c821U;
+constexpr bool kFirstDMEMExecutorBuildEnabled = true;
 constexpr UInt32 kPowerExecutorSchemaVersion = 1;
 constexpr size_t kPowerOnlyStepCount = 26;
 constexpr size_t kPowerExecutionJournalCapacity = kPowerOnlyStepCount * 2;
+constexpr UInt32 kRuntimeDiagnosticSchemaVersion = 1;
+constexpr size_t kPostPowerSnapshotCount = 15;
+constexpr UInt32 kPostPowerExecutionSchemaVersion = 1;
+constexpr size_t kPostPowerExecutionContractCount = 5;
+constexpr size_t kPostPowerExecutionJournalCapacity =
+    kPostPowerExecutionContractCount * 2;
+constexpr size_t kQueueExecutionJournalCapacity = 42;
+constexpr size_t kFirmwareSetupExecutionStepCount = 21;
+constexpr size_t kFirmwareSetupExecutionJournalCapacity =
+    kFirmwareSetupExecutionStepCount * 2;
+constexpr size_t kFirstDMEMExecutionJournalCapacity = 24;
+constexpr UInt32 kFirstDMEMPollIterations = 100000;
+constexpr UInt32 kFirstDMEMPollIntervalMicroseconds = 10;
+constexpr size_t kFirstDMEMTransportJournalCapacity = 28;
 constexpr UInt32 kFirmwareHeaderSize = 64;
 constexpr UInt32 kFirmwareChecksumSize = 8;
 constexpr UInt32 kFirmwareChunkSize = 0x1000;
@@ -57,6 +82,10 @@ constexpr UInt32 kIDDMAChecksumContinue = 1U << 24;
 constexpr UInt32 kIDDMALengthMask = 0x0003ffffU;
 constexpr UInt32 kIDDMAPollIterations = 1000;
 constexpr UInt32 kIDDMAPollIntervalMicroseconds = 10;
+constexpr UInt32 kIDDMAChecksumStatus = 1U << 27;
+constexpr UInt32 kIDDMAChecksumReset = 1U << 25;
+constexpr UInt32 kBeaconPollIterations = 1000;
+constexpr UInt32 kBeaconPollIntervalMicroseconds = 10;
 constexpr size_t kFirmwareRegisterBaselineCount = 12;
 constexpr size_t kLifecyclePlanCount = 23;
 constexpr size_t kPostPowerPlanCount = 5;
@@ -166,6 +195,7 @@ enum PowerJournalOutcome : UInt8 {
     kPowerJournalSucceeded,
     kPowerJournalWriteEffectUnknown,
     kPowerJournalPollTimedOut,
+    kPowerJournalConditionalSkipped,
 };
 
 struct PowerOnlyStepRecord {
@@ -206,13 +236,178 @@ struct PowerExecutorSimulationSummary {
     UInt32 powerOffAuthorizedCount;
 };
 
+struct PostPowerSnapshotRecord {
+    UInt16 offset;
+    UInt8 width;
+    UInt8 stable;
+    UInt32 first;
+    UInt32 second;
+};
+
+struct PostPowerExecutionContractRecord {
+    UInt8 sequence;
+    UInt8 operation;
+    UInt8 width;
+    UInt8 conditional;
+    UInt16 offset;
+    UInt16 reserved;
+    UInt32 mask;
+    UInt32 value;
+    UInt32 requiredHazards;
+    UInt32 forbiddenStateFlags;
+};
+
+struct PostPowerSimulationSummary {
+    UInt16 stepCount;
+    UInt16 unconditionalCount;
+    UInt16 conditionalCount;
+    UInt16 scenarioCount;
+    UInt32 successCount;
+    UInt32 preIntentRejectionCount;
+    UInt32 unknownEffectQuarantineCount;
+    UInt32 conditionalSkipCount;
+    UInt32 rollbackAuthorizedCount;
+    UInt32 powerOffAuthorizedCount;
+};
+
 enum class PowerExecutorResult : UInt8 {
     Disarmed,
     Completed,
+    AlreadyPoweredSnapshot,
     ContractInvalid,
     WriteEffectUnknown,
     PollTimedOut,
     MACStillOff,
+};
+
+enum class PostPowerExecutorResult : UInt8 {
+    Disarmed,
+    Completed,
+    ContractInvalid,
+    PreconditionFailed,
+    WriteEffectUnknown,
+};
+
+enum class QueueExecutorResult : UInt8 {
+    Disarmed,
+    Completed,
+    ContractInvalid,
+    SynchronizeFailed,
+    BMEInvariantFailed,
+    WriteEffectUnknown,
+};
+
+enum class FirmwareSetupExecutorResult : UInt8 {
+    Disarmed,
+    Completed,
+    ContractInvalid,
+    PreconditionFailed,
+    BMEInvariantFailed,
+    WriteEffectUnknown,
+    DDMAActive,
+    TransportFailed,
+};
+
+enum class FirstDMEMExecutorResult : UInt8 {
+    Disarmed,
+    Completed,
+    ContractInvalid,
+    SynchronizeFailed,
+    BMEEnableFailed,
+    BeaconTimedOut,
+    PCIRestoreFailed,
+    DDMAActive,
+    DDMAWriteEffectUnknown,
+    DDMATimedOut,
+};
+
+enum FirstDMEMTransportOperation : UInt8 {
+    kFirstDMEMValidate,
+    kFirstDMEMStagingSynchronize,
+    kFirstDMEMSetBeaconOWN,
+    kFirstDMEMEnableBME,
+    kFirstDMEMBeaconDoorbell,
+    kFirstDMEMValidateBeaconDoorbell,
+    kFirstDMEMRestorePCICommand,
+    kFirstDMEMPrePollIDDMAOWN,
+    kFirstDMEMResetChecksum,
+    kFirstDMEMWriteSource,
+    kFirstDMEMWriteDestination,
+    kFirstDMEMWriteControl,
+    kFirstDMEMPollIDDMAOWN,
+    kFirstDMEMCaptureChecksum,
+};
+
+enum class FirstDMEMTransportResult : UInt8 {
+    Disarmed,
+    Completed,
+    ContractInvalid,
+    SynchronizeFailed,
+    PCICommandUnknown,
+    BeaconCompletionTimedOut,
+    IDDMAActive,
+    IDDMACompletionTimedOut,
+    WriteEffectUnknown,
+};
+
+struct FirstDMEMTransportJournalRecord {
+    UInt8 sequence;
+    UInt8 operation;
+    UInt8 outcome;
+    UInt8 width;
+    UInt16 offset;
+    UInt16 pciCommand;
+    UInt32 before;
+    UInt32 after;
+    UInt32 cumulativeHazards;
+    UInt32 status;
+};
+
+struct FirstDMEMTransportStatus {
+    UInt16 pciCommandOriginal;
+    UInt16 pciCommandBME;
+    UInt16 pciCommandRestored;
+    UInt8 failedOperation;
+    UInt8 completedOperations;
+    UInt16 beaconPollCount;
+    UInt16 iddmaPrePollCount;
+    UInt16 iddmaCompletionPollCount;
+    UInt8 stagingSynchronizeCount;
+    UInt8 ringOutSynchronizeCount;
+    UInt8 ringInSynchronizeCount;
+    UInt8 bmeEnableCount;
+    UInt8 bmeRestoreAttemptCount;
+    UInt8 doorbellWriteCount;
+    UInt8 iddmaWriteCount;
+    UInt8 checksumResetCount;
+    UInt32 doorbellBefore;
+    UInt32 doorbellAfter;
+    UInt32 iddmaControlBefore;
+    UInt32 iddmaControlAfter;
+    UInt32 checksumStatus;
+    UInt32 cumulativeHazards;
+};
+
+enum RuntimeDiagnosticFailure : UInt64 {
+    kDiagnosticMapMissing = 1ULL << 0,
+    kDiagnosticMapShape = 1ULL << 1,
+    kDiagnosticMemoryDecode = 1ULL << 2,
+    kDiagnosticPowerSequence = 1ULL << 3,
+    kDiagnosticDryRunPlan = 1ULL << 4,
+    kDiagnosticSysCfgUnstable = 1ULL << 5,
+    kDiagnosticSysCfgUnexpected = 1ULL << 6,
+    kDiagnosticMACUnstable = 1ULL << 7,
+    kDiagnosticMACUnexpected = 1ULL << 8,
+    kDiagnosticPCIIdentity = 1ULL << 9,
+    kDiagnosticPreSystemUnstable = 1ULL << 10,
+    kDiagnosticQueuePlan = 1ULL << 11,
+    kDiagnosticInitialPCICommand = 1ULL << 12,
+    kDiagnosticFirmwareBaseline = 1ULL << 13,
+    kDiagnosticBARIdentity = 1ULL << 14,
+    kDiagnosticPreSystemValues = 1ULL << 15,
+    kDiagnosticPCIRestore = 1ULL << 16,
+    kDiagnosticTRXPCICommand = 1ULL << 17,
+    kDiagnosticTRXPlan = 1ULL << 18,
 };
 
 struct FirmwareHeader {
@@ -389,6 +584,19 @@ struct FirmwareIDDMAPlanRecord {
     UInt8 checksumResetBefore;
     UInt8 checksumValidateAfter;
 };
+
+struct FirstDMEMJournalRecord {
+    UInt8 sequence;
+    UInt8 operation;
+    UInt8 outcome;
+    UInt8 reserved;
+    UInt16 offset;
+    UInt16 pciCommand;
+    UInt32 before;
+    UInt32 intended;
+    UInt32 observed;
+    UInt32 status;
+} __attribute__((packed));
 
 struct FirmwareRegisterBaseline {
     UInt16 offset;
@@ -1287,7 +1495,8 @@ kFirmwareSetupPlan[kFirmwareSetupPlanCount] = {
     {1, 1, 3, 2, 0x0100, 1, 0x000000ffU, 0x00000005U},
     {1, 4, 3, 4, 0x1330, 1, 0xffffffffU, 0x80000000U},
     {1, 2, 3, 2, 0x0230, 1, 0x0000ffffU, 0x00000200U},
-    {1, 4, 1, 6, 0x022c, 1, 0x80000000U, 0x80000000U},
+    {1, 4, 1, kPlanFlagBackupBefore, 0x022c, 1,
+        0x80000000U, 0x80000000U},
     {1, 1, 4, 2, 0x0550, 1, 0x00000018U, 0x00000010U},
     {2, 1, 2, 0, 0x1082, 0, 0x00000001U, 0},
     {2, 1, 2, 0, 0x0009, 0, 0x00000040U, 0},
@@ -1298,6 +1507,41 @@ kFirmwareSetupPlan[kFirmwareSetupPlanCount] = {
     {4, 1, 1, 8, 0x0003, 0, 0x00000004U, 4},
     {5, 1, 2, 16, 0x0080, 0, 0x00000001U, 0},
     {5, 1, 1, 16, 0x0003, 0, 0x00000004U, 4},
+};
+
+constexpr RegisterPlanRecord
+kFirmwareSetupExecutionContract[kFirmwareSetupExecutionStepCount] = {
+    {0, 1, kPlanMaskClear, kPlanFlagCPUTransition, 0x0003, 0,
+        0x00000004U, 0},
+    {0, 1, kPlanMaskClear, kPlanFlagCPUTransition, 0x001d, 0,
+        0x00000001U, 0},
+    {1, 1, kPlanWrite, kPlanFlagBackupBefore, 0x010d, 1,
+        0x000000ffU, 0x000000c0U},
+    {1, 1, kPlanWrite, kPlanFlagBackupBefore, 0x0100, 2,
+        0x000000ffU, 0x00000005U},
+    {1, 4, kPlanWrite, kPlanFlagBackupBefore, 0x1330, 3,
+        0xffffffffU, 0x80000000U},
+    {1, 2, kPlanWrite, kPlanFlagBackupBefore, 0x0230, 4,
+        0x0000ffffU, 0x00000200U},
+    {1, 4, kPlanMaskSet, kPlanFlagBackupBefore, 0x022c, 5,
+        0x80000000U, 0x80000000U},
+    {1, 1, kPlanMaskReplace, kPlanFlagBackupBefore, 0x0550, 6,
+        0x00000018U, 0x00000010U},
+    {2, 1, kPlanMaskClear, 0, 0x1082, 0, 0x00000001U, 0},
+    {2, 1, kPlanMaskClear, 0, 0x0009, 0, 0x00000040U, 0},
+    {2, 1, kPlanMaskSet, 0, 0x1082, 0, 0x00000001U, 0x00000001U},
+    {2, 1, kPlanMaskSet, 0, 0x0009, 0, 0x00000040U, 0x00000040U},
+    {3, 2, kPlanFirmwareMode, 0, 0x0080, 0,
+        0x0000c7ffU, 0x00000001U},
+    {4, 4, kPlanPollOwnership, 0, 0x1208, 0,
+        0x80000000U, 0},
+    {5, 1, kPlanMaskClear, 0, 0x0080, 0, 0x00000001U, 0},
+    {6, 1, kPlanRestoreSaved, 0, 0x0550, 6, 0x000000ffU, 0},
+    {6, 4, kPlanRestoreSaved, 0, 0x022c, 5, 0xffffffffU, 0},
+    {6, 2, kPlanRestoreSaved, 0, 0x0230, 4, 0x0000ffffU, 0},
+    {6, 4, kPlanRestoreSaved, 0, 0x1330, 3, 0xffffffffU, 0},
+    {6, 1, kPlanRestoreSaved, 0, 0x0100, 2, 0x000000ffU, 0},
+    {6, 1, kPlanRestoreSaved, 0, 0x010d, 1, 0x000000ffU, 0},
 };
 
 constexpr RegisterPlanRecord
@@ -1552,6 +1796,36 @@ bool buildTRXDevicePlan(const PreparedDMA *rings,
 
     return planCount == kTRXDevicePlanCapacity && baseCount == 9 &&
            entryCount == 8;
+}
+
+bool validateQueueCommandReadbackContract(const TRXDevicePlanRecord *plan,
+                                          size_t planCount)
+{
+    if (!plan || planCount != kTRXDevicePlanCapacity)
+        return false;
+
+    UInt8 commandCount = 0;
+    for (size_t index = 0; index < planCount; index++) {
+        const TRXDevicePlanRecord &record = plan[index];
+        const bool rwPointerClear =
+            record.operation == 3 && record.width == 4 &&
+            record.offset == kRegisterRWPTRClear &&
+            record.mask == 0xffffffffU && record.value == 0xffffffffU;
+        const bool h2cIndexClear =
+            record.operation == 4 && record.width == 4 &&
+            record.offset == 0x1330 && record.mask == 0x00010100U &&
+            record.value == 0x00010100U;
+        if (rwPointerClear || h2cIndexClear)
+            commandCount++;
+        else if (record.operation == 3 || record.operation == 4)
+            return false;
+    }
+
+    const TRXDevicePlanRecord &finalRecord = plan[planCount - 1];
+    return commandCount == 2 && finalRecord.operation == 5 &&
+           finalRecord.width == 4 && finalRecord.offset == 0x0300 &&
+           finalRecord.mask == 0x00108000U &&
+           finalRecord.value == 0x00108000U;
 }
 
 bool buildFirmwareIDDMAPlan(const FirmwareTransferPlan *transferPlan,
@@ -1809,7 +2083,7 @@ bool validateReservedPagePlan()
                     restore.restoreGroup == record.restoreGroup &&
                     restore.offset == record.offset &&
                     restore.width == record.width &&
-                    restore.mask == record.mask)
+                    (restore.mask & record.mask) == record.mask)
                     matches++;
             }
             if (matches != 1)
@@ -1826,7 +2100,7 @@ bool validateReservedPagePlan()
                     backup.restoreGroup == record.restoreGroup &&
                     backup.offset == record.offset &&
                     backup.width == record.width &&
-                    backup.mask == record.mask)
+                    (record.mask & backup.mask) == backup.mask)
                     matches++;
             }
             if (matches != 1)
@@ -2709,7 +2983,7 @@ bool validateSymbolicInterpreter(SymbolicInterpreterSummary &summary)
     summary.expectedRejectedMutationCount = 7;
 
     SymbolicExecutionState releasable = {};
-    initializeSymbolicState(releasable, kDMAQuarantinePower,
+    initializeSymbolicState(releasable, kDMAColdRemovalRequired,
         kHazardAddressProgrammed | kHazardPowerWritePossible |
             kHazardBMEPossible);
     releasable.admission = kAdmissionContained;
@@ -3431,6 +3705,38 @@ static_assert(sizeof(PowerExecutionJournalRecord) == 24,
               "unexpected power journal layout");
 static_assert(sizeof(PowerExecutorSimulationSummary) == 32,
               "unexpected power simulation summary layout");
+static_assert(sizeof(PostPowerSnapshotRecord) == 12,
+              "unexpected post-power snapshot layout");
+static_assert(sizeof(PostPowerExecutionContractRecord) == 24,
+              "unexpected post-power execution contract layout");
+static_assert(sizeof(PostPowerSimulationSummary) == 32,
+              "unexpected post-power simulation summary layout");
+
+constexpr PostPowerSnapshotRecord
+kPostPowerSnapshotTemplate[kPostPowerSnapshotCount] = {
+    {0x0002, 1, 0, 0, 0}, {0x0003, 1, 0, 0, 0},
+    {0x0004, 1, 0, 0, 0}, {0x0005, 1, 0, 0, 0},
+    {0x0006, 1, 0, 0, 0}, {0x0080, 4, 0, 0, 0},
+    {0x0100, 1, 0, 0, 0}, {0x0101, 1, 0, 0, 0},
+    {0x0204, 2, 0, 0, 0}, {0x022c, 4, 0, 0, 0},
+    {0x0300, 4, 0, 0, 0}, {0x0383, 1, 0, 0, 0},
+    {0x1080, 4, 0, 0, 0}, {0x1082, 1, 0, 0, 0},
+    {0x1208, 4, 0, 0, 0},
+};
+
+constexpr PostPowerExecutionContractRecord
+kPostPowerExecutionContract[kPostPowerExecutionContractCount] = {
+    {0, kPlanMaskSet, 4, 0, 0x1080, 0, 0x00010100U, 0x00010100U,
+        kHazardPowerWritePossible, kDMAFlagBMEEnabled},
+    {1, kPlanMaskSet, 1, 0, 0x0003, 0, 0x000000d8U, 0x000000d8U,
+        kHazardPowerWritePossible, kDMAFlagBMEEnabled},
+    {2, kPlanMaskReplace, 1, 0, 0x1103, 0, 0x0000000fU, 0x0000000cU,
+        kHazardPowerWritePossible, kDMAFlagBMEEnabled},
+    {3, kPlanMaskClear, 4, 1, 0x0080, 0, 0x00100000U, 0,
+        kHazardPowerWritePossible, kDMAFlagBMEEnabled},
+    {4, kPlanMaskClear, 4, 1, 0x0040, 0, 0x00080000U, 0,
+        kHazardPowerWritePossible, kDMAFlagBMEEnabled},
+};
 
 bool buildPowerOnlyContract(PowerOnlyStepRecord *steps, size_t capacity,
                             size_t &stepCount)
@@ -3894,6 +4200,8 @@ const char *powerExecutorResultName(PowerExecutorResult result)
         return "Disarmed";
     case PowerExecutorResult::Completed:
         return "Completed";
+    case PowerExecutorResult::AlreadyPoweredSnapshot:
+        return "AlreadyPoweredSnapshot";
     case PowerExecutorResult::ContractInvalid:
         return "ContractInvalid";
     case PowerExecutorResult::WriteEffectUnknown:
@@ -3902,6 +4210,991 @@ const char *powerExecutorResultName(PowerExecutorResult result)
         return "PollTimedOut";
     case PowerExecutorResult::MACStillOff:
         return "MACStillOff";
+    }
+    return "Unknown";
+}
+
+bool collectPostPowerSnapshot(const volatile UInt8 *base,
+                              PostPowerSnapshotRecord *records,
+                              size_t count, UInt8 &stableCount)
+{
+    stableCount = 0;
+    if (!base || !records || count != kPostPowerSnapshotCount)
+        return false;
+    memcpy(records, kPostPowerSnapshotTemplate,
+           sizeof(kPostPowerSnapshotTemplate));
+    for (size_t index = 0; index < count; index++)
+        records[index].first = readRegisterWidth(
+            base, records[index].offset, records[index].width);
+    IODelay(50);
+    for (size_t index = 0; index < count; index++) {
+        PostPowerSnapshotRecord &record = records[index];
+        record.second = readRegisterWidth(base, record.offset, record.width);
+        record.stable = record.first == record.second;
+        stableCount += record.stable;
+    }
+    return stableCount == count;
+}
+
+bool validatePostPowerExecutionContract()
+{
+    for (size_t index = 0; index < kPostPowerExecutionContractCount; index++) {
+        const PostPowerExecutionContractRecord &record =
+            kPostPowerExecutionContract[index];
+        if (record.sequence != index ||
+            (record.width != 1 && record.width != 4) || record.mask == 0 ||
+            record.operation < kPlanMaskSet ||
+            record.operation > kPlanMaskReplace ||
+            (record.value & ~record.mask) != 0 ||
+            record.requiredHazards != kHazardPowerWritePossible ||
+            (record.forbiddenStateFlags & kDMAFlagBMEEnabled) == 0)
+            return false;
+    }
+    return kPostPowerExecutionContract[0].offset == 0x1080 &&
+        kPostPowerExecutionContract[1].offset == 0x0003 &&
+        kPostPowerExecutionContract[2].offset == 0x1103 &&
+        kPostPowerExecutionContract[3].conditional &&
+        kPostPowerExecutionContract[4].conditional;
+}
+
+bool simulatePostPowerExecution(PostPowerSimulationSummary &summary)
+{
+    summary = {};
+    if (!validatePostPowerExecutionContract())
+        return false;
+    summary.stepCount = kPostPowerExecutionContractCount;
+    for (size_t index = 0; index < kPostPowerExecutionContractCount; index++) {
+        const PostPowerExecutionContractRecord &record =
+            kPostPowerExecutionContract[index];
+        if (record.conditional) {
+            summary.conditionalCount++;
+            summary.conditionalSkipCount++;
+        } else {
+            summary.unconditionalCount++;
+        }
+        summary.successCount++;
+        summary.preIntentRejectionCount++;
+        summary.unknownEffectQuarantineCount++;
+    }
+    summary.scenarioCount = static_cast<UInt16>(summary.stepCount * 3 +
+        summary.conditionalSkipCount);
+    return summary.stepCount == 5 && summary.unconditionalCount == 3 &&
+        summary.conditionalCount == 2 && summary.scenarioCount == 17 &&
+        summary.successCount == 5 &&
+        summary.preIntentRejectionCount == 5 &&
+        summary.unknownEffectQuarantineCount == 5 &&
+        summary.conditionalSkipCount == 2 &&
+        summary.rollbackAuthorizedCount == 0 &&
+        summary.powerOffAuthorizedCount == 0;
+}
+
+bool appendPostPowerJournal(PowerExecutionJournalRecord *journal,
+                            size_t capacity, size_t &count, UInt8 step,
+                            PowerJournalOutcome outcome,
+                            const PostPowerExecutionContractRecord &contract,
+                            UInt32 before, UInt32 after, UInt32 status)
+{
+    if (!journal || count >= capacity || count > 0xffU)
+        return false;
+    journal[count] = {
+        static_cast<UInt8>(count), step, static_cast<UInt8>(outcome),
+        contract.width, contract.offset, 0, before, after,
+        kHazardPowerWritePossible, status,
+    };
+    __sync_synchronize();
+    count++;
+    return true;
+}
+
+PostPowerExecutorResult executePostPowerContract(
+    volatile UInt8 *base, const PostPowerExecutionContractRecord *steps,
+    size_t stepCount, PowerExecutionJournalRecord *journal,
+    size_t journalCapacity, size_t &journalCount, UInt8 &completedWrites,
+    UInt8 &conditionalSkips, UInt8 &failedStep)
+{
+    journalCount = 0;
+    completedWrites = 0;
+    conditionalSkips = 0;
+    failedStep = 0xffU;
+    if (!base || !steps || !journal ||
+        stepCount != kPostPowerExecutionContractCount ||
+        journalCapacity < stepCount * 2 ||
+        !validatePostPowerExecutionContract())
+        return PostPowerExecutorResult::ContractInvalid;
+
+    const UInt32 firmwareControl = readRegisterWidth(base, 0x0080, 4);
+    IODelay(50);
+    if (firmwareControl != readRegisterWidth(base, 0x0080, 4) ||
+        base[kRegisterCr] == 0xeaU)
+        return PostPowerExecutorResult::PreconditionFailed;
+    const bool bootFromFlash = (firmwareControl & 0x00100000U) != 0;
+
+    for (size_t index = 0; index < stepCount; index++) {
+        const PostPowerExecutionContractRecord &step = steps[index];
+        const UInt32 before = readRegisterWidth(base, step.offset, step.width);
+        IODelay(50);
+        if (before != readRegisterWidth(base, step.offset, step.width)) {
+            failedStep = static_cast<UInt8>(index);
+            return PostPowerExecutorResult::PreconditionFailed;
+        }
+        const UInt32 projected =
+            (before & ~step.mask) | (step.value & step.mask);
+        if (!appendPostPowerJournal(
+                journal, journalCapacity, journalCount,
+                static_cast<UInt8>(index), kPowerJournalIntent, step,
+                before, projected, kIOReturnSuccess)) {
+            failedStep = static_cast<UInt8>(index);
+            return PostPowerExecutorResult::ContractInvalid;
+        }
+
+        if (step.conditional && !bootFromFlash) {
+            if (!appendPostPowerJournal(
+                    journal, journalCapacity, journalCount,
+                    static_cast<UInt8>(index),
+                    kPowerJournalConditionalSkipped, step, before, before,
+                    kIOReturnSuccess)) {
+                failedStep = static_cast<UInt8>(index);
+                return PostPowerExecutorResult::ContractInvalid;
+            }
+            conditionalSkips++;
+            continue;
+        }
+
+        if (step.width == 4)
+            OSWriteLittleInt32(base, step.offset, projected);
+        else
+            base[step.offset] = static_cast<UInt8>(projected);
+        OSSynchronizeIO();
+        const UInt32 observed = readRegisterWidth(
+            base, step.offset, step.width);
+        if ((observed & step.mask) != (projected & step.mask)) {
+            appendPostPowerJournal(
+                journal, journalCapacity, journalCount,
+                static_cast<UInt8>(index),
+                kPowerJournalWriteEffectUnknown, step, before, observed,
+                static_cast<UInt32>(kIOReturnIOError));
+            failedStep = static_cast<UInt8>(index);
+            return PostPowerExecutorResult::WriteEffectUnknown;
+        }
+        if (!appendPostPowerJournal(
+                journal, journalCapacity, journalCount,
+                static_cast<UInt8>(index), kPowerJournalSucceeded, step,
+                before, observed, kIOReturnSuccess)) {
+            failedStep = static_cast<UInt8>(index);
+            return PostPowerExecutorResult::WriteEffectUnknown;
+        }
+        completedWrites++;
+    }
+    return PostPowerExecutorResult::Completed;
+}
+
+const char *postPowerExecutorResultName(PostPowerExecutorResult result)
+{
+    switch (result) {
+    case PostPowerExecutorResult::Disarmed:
+        return "Disarmed";
+    case PostPowerExecutorResult::Completed:
+        return "Completed";
+    case PostPowerExecutorResult::ContractInvalid:
+        return "ContractInvalid";
+    case PostPowerExecutorResult::PreconditionFailed:
+        return "PreconditionFailed";
+    case PostPowerExecutorResult::WriteEffectUnknown:
+        return "WriteEffectUnknown";
+    }
+    return "Unknown";
+}
+
+bool appendQueueJournal(PowerExecutionJournalRecord *journal,
+                        size_t capacity, size_t &count, UInt8 step,
+                        PowerJournalOutcome outcome,
+                        const TRXDevicePlanRecord &record,
+                        UInt32 before, UInt32 after, UInt32 status)
+{
+    if (!journal || count >= capacity || count > 0xffU)
+        return false;
+    journal[count] = {
+        static_cast<UInt8>(count), step, static_cast<UInt8>(outcome),
+        record.width, record.offset, 0, before, after,
+        kHazardPowerWritePossible | kHazardAddressProgrammed, status,
+    };
+    __sync_synchronize();
+    count++;
+    return true;
+}
+
+QueueExecutorResult executeQueueContract(
+    IOPCIDevice *device, volatile UInt8 *base,
+    const TRXDevicePlanRecord *plan, size_t planCount,
+    PreparedDMA *rings, UInt32 ringCount,
+    PowerExecutionJournalRecord *journal, size_t journalCapacity,
+    size_t &journalCount, UInt8 &completedWrites, UInt8 &failedStep,
+    UInt8 &synchronizedRingCount, UInt8 &commandReadbackCount,
+    UInt8 &rwPointerCommandReadbackCount,
+    UInt8 &h2cCommandReadbackCount, UInt32 &dmaControlObserved)
+{
+    journalCount = 0;
+    completedWrites = 0;
+    failedStep = 0xffU;
+    synchronizedRingCount = 0;
+    commandReadbackCount = 0;
+    rwPointerCommandReadbackCount = 0;
+    h2cCommandReadbackCount = 0;
+    dmaControlObserved = 0xffffffffU;
+    if (!device || !base || !plan || !rings ||
+        planCount != kTRXDevicePlanCapacity ||
+        ringCount != kTRXResourceCount ||
+        journalCapacity < planCount * 2 ||
+        !validateQueueCommandReadbackContract(plan, planCount))
+        return QueueExecutorResult::ContractInvalid;
+
+    for (UInt32 index = 0; index < ringCount; index++) {
+        if (!rings[index].prepared || !rings[index].command ||
+            rings[index].command->synchronize(kIODirectionOut) !=
+                kIOReturnSuccess)
+            return QueueExecutorResult::SynchronizeFailed;
+        synchronizedRingCount++;
+    }
+    __sync_synchronize();
+
+    for (size_t index = 0; index < planCount; index++) {
+        const TRXDevicePlanRecord &record = plan[index];
+        const UInt16 commandBefore =
+            device->configRead16(kIOPCIConfigCommand);
+        if ((commandBefore & kIOPCICommandBusMaster) != 0) {
+            failedStep = static_cast<UInt8>(index);
+            return QueueExecutorResult::BMEInvariantFailed;
+        }
+        const UInt32 before = readRegisterWidth(
+            base, record.offset, record.width);
+        const UInt32 projected =
+            (before & ~record.mask) | (record.value & record.mask);
+        if (!appendQueueJournal(
+                journal, journalCapacity, journalCount,
+                static_cast<UInt8>(index), kPowerJournalIntent, record,
+                before, projected, kIOReturnSuccess)) {
+            failedStep = static_cast<UInt8>(index);
+            return QueueExecutorResult::ContractInvalid;
+        }
+        if (record.width == 4)
+            OSWriteLittleInt32(base, record.offset, projected);
+        else if (record.width == 2)
+            OSWriteLittleInt16(base, record.offset,
+                               static_cast<UInt16>(projected));
+        else
+            base[record.offset] = static_cast<UInt8>(projected);
+        OSSynchronizeIO();
+        const UInt32 observed = readRegisterWidth(
+            base, record.offset, record.width);
+        const UInt16 commandAfter =
+            device->configRead16(kIOPCIConfigCommand);
+        if ((commandAfter & kIOPCICommandBusMaster) != 0) {
+            appendQueueJournal(
+                journal, journalCapacity, journalCount,
+                static_cast<UInt8>(index),
+                kPowerJournalWriteEffectUnknown, record, before, observed,
+                static_cast<UInt32>(kIOReturnNotPermitted));
+            failedStep = static_cast<UInt8>(index);
+            return QueueExecutorResult::BMEInvariantFailed;
+        }
+        const bool rwPointerClearCommand =
+            record.operation == 3 && record.width == 4 &&
+            record.offset == kRegisterRWPTRClear &&
+            record.mask == 0xffffffffU && record.value == 0xffffffffU;
+        const bool h2cIndexClearCommand =
+            record.operation == 4 && record.width == 4 &&
+            record.offset == 0x1330 && record.mask == 0x00010100U &&
+            record.value == 0x00010100U;
+        const bool selfClearingCommand =
+            rwPointerClearCommand || h2cIndexClearCommand;
+        const UInt32 expected = selfClearingCommand ? 0 : projected;
+        if ((observed & record.mask) != (expected & record.mask)) {
+            appendQueueJournal(
+                journal, journalCapacity, journalCount,
+                static_cast<UInt8>(index),
+                kPowerJournalWriteEffectUnknown, record, before, observed,
+                static_cast<UInt32>(kIOReturnIOError));
+            failedStep = static_cast<UInt8>(index);
+            return QueueExecutorResult::WriteEffectUnknown;
+        }
+        if (selfClearingCommand) {
+            commandReadbackCount++;
+            if (rwPointerClearCommand)
+                rwPointerCommandReadbackCount++;
+            else
+                h2cCommandReadbackCount++;
+        }
+        if (record.operation == 5)
+            dmaControlObserved = observed;
+        if (!appendQueueJournal(
+                journal, journalCapacity, journalCount,
+                static_cast<UInt8>(index), kPowerJournalSucceeded, record,
+                before, observed, kIOReturnSuccess)) {
+            failedStep = static_cast<UInt8>(index);
+            return QueueExecutorResult::WriteEffectUnknown;
+        }
+        completedWrites++;
+    }
+    return QueueExecutorResult::Completed;
+}
+
+const char *queueExecutorResultName(QueueExecutorResult result)
+{
+    switch (result) {
+    case QueueExecutorResult::Disarmed:
+        return "Disarmed";
+    case QueueExecutorResult::Completed:
+        return "Completed";
+    case QueueExecutorResult::ContractInvalid:
+        return "ContractInvalid";
+    case QueueExecutorResult::SynchronizeFailed:
+        return "SynchronizeFailed";
+    case QueueExecutorResult::BMEInvariantFailed:
+        return "BMEInvariantFailed";
+    case QueueExecutorResult::WriteEffectUnknown:
+        return "WriteEffectUnknown";
+    }
+    return "Unknown";
+}
+
+bool validateFirmwareSetupExecutionContract()
+{
+    UInt8 backupCount = 0;
+    UInt8 restoreCount = 0;
+    UInt8 pollCount = 0;
+    UInt8 rqpnLoadCommandCount = 0;
+    for (size_t index = 0; index < kFirmwareSetupExecutionStepCount; index++) {
+        const RegisterPlanRecord &record =
+            kFirmwareSetupExecutionContract[index];
+        if ((record.width != 1 && record.width != 2 && record.width != 4) ||
+            record.mask == 0 || record.offset == 0x0383 ||
+            record.offset == 0x1200 || record.offset == 0x1204 ||
+            (record.offset == 0x1208 &&
+             record.operation != kPlanPollOwnership) ||
+            (record.offset == 0x0003 &&
+             (record.value & 0x00000004U) != 0) ||
+            (record.offset == 0x001d &&
+             (record.value & 0x00000001U) != 0))
+            return false;
+        if ((record.flags & kPlanFlagBackupBefore) != 0) {
+            if (record.restoreGroup == 0 || record.restoreGroup > 6)
+                return false;
+            backupCount++;
+        }
+        if (record.operation == kPlanRestoreSaved) {
+            if (record.restoreGroup == 0 || record.restoreGroup > 6)
+                return false;
+            restoreCount++;
+        }
+        if (record.operation == kPlanPollOwnership)
+            pollCount++;
+        if (record.offset == 0x022c) {
+            const bool setupLoad = record.width == 4 &&
+                record.operation == kPlanMaskSet &&
+                record.mask == 0x80000000U &&
+                record.value == 0x80000000U && record.restoreGroup == 5;
+            const bool restoreLoad = record.width == 4 &&
+                record.operation == kPlanRestoreSaved &&
+                record.mask == 0xffffffffU && record.restoreGroup == 5;
+            if (!setupLoad && !restoreLoad)
+                return false;
+            rqpnLoadCommandCount++;
+        }
+    }
+    return backupCount == 6 && restoreCount == 6 && pollCount == 1 &&
+        rqpnLoadCommandCount == 2 &&
+        kFirmwareSetupExecutionContract[6].operation == kPlanMaskSet &&
+        kFirmwareSetupExecutionContract[6].offset == 0x022c &&
+        kFirmwareSetupExecutionContract[16].operation == kPlanRestoreSaved &&
+        kFirmwareSetupExecutionContract[16].offset == 0x022c &&
+        kFirmwareSetupExecutionContract[12].offset == 0x0080 &&
+        kFirmwareSetupExecutionContract[13].offset == 0x1208 &&
+        kFirmwareSetupExecutionContract[14].offset == 0x0080;
+}
+
+bool isRQPNSelfClearingLoad(const RegisterPlanRecord &record)
+{
+    if (record.width != 4 || record.offset != 0x022c ||
+        record.restoreGroup != 5)
+        return false;
+    return (record.operation == kPlanMaskSet &&
+            record.mask == 0x80000000U &&
+            record.value == 0x80000000U) ||
+        (record.operation == kPlanRestoreSaved &&
+         record.mask == 0xffffffffU);
+}
+
+bool appendFirmwareSetupJournal(PowerExecutionJournalRecord *journal,
+                                size_t capacity, size_t &count, UInt8 step,
+                                PowerJournalOutcome outcome,
+                                const RegisterPlanRecord &record,
+                                UInt32 before, UInt32 after, UInt32 status)
+{
+    if (!journal || count >= capacity || count > 0xffU)
+        return false;
+    journal[count] = {
+        static_cast<UInt8>(count), step, static_cast<UInt8>(outcome),
+        record.width, record.offset, 0, before, after,
+        kHazardPowerWritePossible | kHazardAddressProgrammed, status,
+    };
+    __sync_synchronize();
+    count++;
+    return true;
+}
+
+bool appendFirstDMEMJournal(FirstDMEMTransportJournalRecord *journal,
+                            size_t capacity, size_t &count, UInt8 operation,
+                            PowerJournalOutcome outcome, UInt8 width,
+                            UInt16 offset, UInt16 pciCommand, UInt32 before,
+                            UInt32 after, UInt32 hazards, UInt32 status)
+{
+    if (!journal || count >= capacity || count > 0xffU)
+        return false;
+    journal[count] = {
+        static_cast<UInt8>(count), operation, static_cast<UInt8>(outcome),
+        width, offset, pciCommand, before, after, hazards, status,
+    };
+    __sync_synchronize();
+    count++;
+    return true;
+}
+
+FirstDMEMTransportResult executeFirstDMEMTransport(
+    IOPCIDevice *device, volatile UInt8 *base,
+    const FirmwareIDDMAPlanRecord *plan, size_t planCount,
+    IOBufferMemoryDescriptor *stagingBuffer, IODMACommand *stagingCommand,
+    PreparedDMA *rings, UInt32 ringCount,
+    FirstDMEMTransportJournalRecord *journal, size_t journalCapacity,
+    size_t &journalCount, FirstDMEMTransportStatus &status)
+{
+    journalCount = 0;
+    status = {};
+    status.pciCommandOriginal = 0xffffU;
+    status.pciCommandBME = 0xffffU;
+    status.pciCommandRestored = 0xffffU;
+    status.failedOperation = 0xffU;
+    constexpr UInt32 beaconResourceIndex = 4;
+    const UInt32 expectedControl = kIDDMAOwn | kIDDMAChecksumEnable |
+        kFirmwareChunkSize;
+    if (!device || !base || !plan || planCount == 0 || !stagingBuffer ||
+        !stagingCommand || !rings || ringCount != kTRXResourceCount ||
+        !journal || journalCapacity < kFirstDMEMTransportJournalCapacity)
+        return FirstDMEMTransportResult::ContractInvalid;
+
+    PreparedDMA &beaconRing = rings[beaconResourceIndex];
+    UInt8 *staging = static_cast<UInt8 *>(stagingBuffer->getBytesNoCopy());
+    PCITXBufferElement *elements = beaconRing.buffer ?
+        static_cast<PCITXBufferElement *>(beaconRing.buffer->getBytesNoCopy()) :
+        nullptr;
+    const FirmwareIDDMAPlanRecord &record = plan[0];
+    status.pciCommandOriginal = device->configRead16(kIOPCIConfigCommand);
+    const bool valid = record.section == 0 && record.chunk == 0 &&
+        record.firstChunk == 1 && record.lastChunk == 0 &&
+        record.firmwareOffset == kFirmwareHeaderSize &&
+        record.length == kFirmwareChunkSize &&
+        record.destination == 0x00200000U &&
+        record.control == expectedControl &&
+        record.source == 0x18780030U && record.preOwnPoll == 1 &&
+        record.postOwnPoll == 1 && record.checksumResetBefore == 1 &&
+        record.checksumValidateAfter == 0 &&
+        record.stagingPacketLength == kFirmwareStagingPacketSize &&
+        status.pciCommandOriginal == kIOPCICommandMemorySpace &&
+        OSReadLittleInt32(base, kRegisterBeaconRingBase) == beaconRing.address &&
+        elements && staging && beaconRing.command && beaconRing.prepared &&
+        beaconRing.length == kBeaconDescriptorRingSize &&
+        OSSwapLittleToHostInt16(elements[0].bufferSize) ==
+            kTXPacketDescriptorSize &&
+        (OSSwapLittleToHostInt16(elements[0].psbLength) & kBeaconQueueOwn) == 0 &&
+        (OSSwapLittleToHostInt16(elements[0].psbLength) | kBeaconQueueOwn) ==
+            record.stagingPSBLength &&
+        OSSwapLittleToHostInt16(elements[1].bufferSize) == kFirmwareChunkSize &&
+        OSSwapLittleToHostInt32(elements[1].address) ==
+            OSSwapLittleToHostInt32(elements[0].address) +
+                kTXPacketDescriptorSize &&
+        memcmp(staging + kTXPacketDescriptorSize,
+               firmwareSectionStart + record.firmwareOffset,
+               kFirmwareChunkSize) == 0;
+    appendFirstDMEMJournal(journal, journalCapacity, journalCount,
+        kFirstDMEMValidate, kPowerJournalIntent, 0, 0, 0, 0, 1, 0,
+        kIOReturnSuccess);
+    if (!valid) {
+        appendFirstDMEMJournal(journal, journalCapacity, journalCount,
+            kFirstDMEMValidate, kPowerJournalWriteEffectUnknown, 0, 0, 0, 0,
+            0, 0, kIOReturnBadArgument);
+        status.failedOperation = kFirstDMEMValidate;
+        return FirstDMEMTransportResult::ContractInvalid;
+    }
+    appendFirstDMEMJournal(journal, journalCapacity, journalCount,
+        kFirstDMEMValidate, kPowerJournalSucceeded, 0, 0, 0, 0, 1, 0,
+        kIOReturnSuccess);
+    status.completedOperations++;
+
+    appendFirstDMEMJournal(journal, journalCapacity, journalCount,
+        kFirstDMEMStagingSynchronize, kPowerJournalIntent, 0, 0, 0, 0, 0, 0,
+        kIOReturnSuccess);
+    IOReturn ioStatus = stagingCommand->synchronize(kIODirectionOut);
+    if (ioStatus != kIOReturnSuccess) {
+        appendFirstDMEMJournal(journal, journalCapacity, journalCount,
+            kFirstDMEMStagingSynchronize, kPowerJournalWriteEffectUnknown, 0,
+            0, 0, 0, 0, 0, ioStatus);
+        status.failedOperation = kFirstDMEMStagingSynchronize;
+        return FirstDMEMTransportResult::SynchronizeFailed;
+    }
+    status.stagingSynchronizeCount++;
+    appendFirstDMEMJournal(journal, journalCapacity, journalCount,
+        kFirstDMEMStagingSynchronize, kPowerJournalSucceeded, 0, 0, 0, 0, 0,
+        0, kIOReturnSuccess);
+    status.completedOperations++;
+
+    const UInt16 psbBefore = OSSwapLittleToHostInt16(elements[0].psbLength);
+    appendFirstDMEMJournal(journal, journalCapacity, journalCount,
+        kFirstDMEMSetBeaconOWN, kPowerJournalIntent, 2, 0, 0, psbBefore,
+        psbBefore | kBeaconQueueOwn, kHazardBeaconPossible, kIOReturnSuccess);
+    elements[0].psbLength = OSSwapHostToLittleInt16(
+        static_cast<UInt16>(psbBefore | kBeaconQueueOwn));
+    ioStatus = beaconRing.command->synchronize(kIODirectionOut);
+    status.cumulativeHazards |= kHazardBeaconPossible;
+    if (ioStatus != kIOReturnSuccess) {
+        appendFirstDMEMJournal(journal, journalCapacity, journalCount,
+            kFirstDMEMSetBeaconOWN, kPowerJournalWriteEffectUnknown, 2, 0, 0,
+            psbBefore, psbBefore | kBeaconQueueOwn, status.cumulativeHazards,
+            ioStatus);
+        status.failedOperation = kFirstDMEMSetBeaconOWN;
+        return FirstDMEMTransportResult::SynchronizeFailed;
+    }
+    status.ringOutSynchronizeCount++;
+    __sync_synchronize();
+    appendFirstDMEMJournal(journal, journalCapacity, journalCount,
+        kFirstDMEMSetBeaconOWN, kPowerJournalSucceeded, 2, 0, 0, psbBefore,
+        psbBefore | kBeaconQueueOwn, status.cumulativeHazards,
+        kIOReturnSuccess);
+    status.completedOperations++;
+
+    const UInt16 bmeCommand = static_cast<UInt16>(
+        status.pciCommandOriginal | kIOPCICommandMemorySpace |
+        kIOPCICommandBusMaster);
+    appendFirstDMEMJournal(journal, journalCapacity, journalCount,
+        kFirstDMEMEnableBME, kPowerJournalIntent, 2, kIOPCIConfigCommand,
+        status.pciCommandOriginal, status.pciCommandOriginal, bmeCommand,
+        status.cumulativeHazards | kHazardBMEPossible, kIOReturnSuccess);
+    device->configWrite16(kIOPCIConfigCommand, bmeCommand);
+    status.bmeEnableCount++;
+    status.pciCommandBME = device->configRead16(kIOPCIConfigCommand);
+    status.cumulativeHazards |= kHazardBMEPossible;
+    if (status.pciCommandBME != bmeCommand) {
+        status.failedOperation = kFirstDMEMEnableBME;
+        goto restore_pci_failure;
+    }
+    appendFirstDMEMJournal(journal, journalCapacity, journalCount,
+        kFirstDMEMEnableBME, kPowerJournalSucceeded, 2, kIOPCIConfigCommand,
+        status.pciCommandBME, status.pciCommandOriginal, status.pciCommandBME,
+        status.cumulativeHazards, kIOReturnSuccess);
+    status.completedOperations++;
+
+    status.doorbellBefore = base[kRegisterBeaconWork];
+    appendFirstDMEMJournal(journal, journalCapacity, journalCount,
+        kFirstDMEMBeaconDoorbell, kPowerJournalIntent, 1,
+        kRegisterBeaconWork, status.pciCommandBME, status.doorbellBefore,
+        status.doorbellBefore | 0x10U,
+        status.cumulativeHazards | kHazardBeaconPossible, kIOReturnSuccess);
+    base[kRegisterBeaconWork] = static_cast<UInt8>(status.doorbellBefore | 0x10U);
+    OSSynchronizeIO();
+    status.doorbellWriteCount++;
+    status.doorbellAfter = base[kRegisterBeaconWork];
+    appendFirstDMEMJournal(journal, journalCapacity, journalCount,
+        kFirstDMEMBeaconDoorbell, kPowerJournalSucceeded, 1,
+        kRegisterBeaconWork, status.pciCommandBME, status.doorbellBefore,
+        status.doorbellAfter, status.cumulativeHazards, kIOReturnSuccess);
+    status.completedOperations++;
+
+    appendFirstDMEMJournal(journal, journalCapacity, journalCount,
+        kFirstDMEMValidateBeaconDoorbell, kPowerJournalIntent, 1,
+        kRegisterBeaconWork, status.pciCommandBME,
+        status.doorbellBefore | 0x10U, status.doorbellAfter,
+        status.cumulativeHazards, kIOReturnSuccess);
+    status.beaconPollCount = 1;
+    if ((status.doorbellAfter & 0x10U) != 0) {
+        appendFirstDMEMJournal(journal, journalCapacity, journalCount,
+            kFirstDMEMValidateBeaconDoorbell, kPowerJournalWriteEffectUnknown,
+            1, kRegisterBeaconWork, status.pciCommandBME,
+            status.doorbellBefore | 0x10U, status.doorbellAfter,
+            status.cumulativeHazards, kIOReturnIOError);
+        status.failedOperation = kFirstDMEMValidateBeaconDoorbell;
+        goto restore_pci_failure;
+    }
+    appendFirstDMEMJournal(journal, journalCapacity, journalCount,
+        kFirstDMEMValidateBeaconDoorbell, kPowerJournalSucceeded, 1,
+        kRegisterBeaconWork, status.pciCommandBME,
+        status.doorbellBefore | 0x10U, status.doorbellAfter,
+        status.cumulativeHazards, kIOReturnSuccess);
+    status.completedOperations++;
+
+    appendFirstDMEMJournal(journal, journalCapacity, journalCount,
+        kFirstDMEMRestorePCICommand, kPowerJournalIntent, 2,
+        kIOPCIConfigCommand, status.pciCommandBME, status.pciCommandBME,
+        status.pciCommandOriginal, status.cumulativeHazards, kIOReturnSuccess);
+    for (; status.bmeRestoreAttemptCount < 3;
+         status.bmeRestoreAttemptCount++) {
+        device->configWrite16(kIOPCIConfigCommand, status.pciCommandOriginal);
+        status.pciCommandRestored =
+            device->configRead16(kIOPCIConfigCommand);
+        if (status.pciCommandRestored == status.pciCommandOriginal)
+            break;
+        IODelay(50);
+    }
+    status.bmeRestoreAttemptCount++;
+    if (status.pciCommandRestored != status.pciCommandOriginal) {
+        appendFirstDMEMJournal(journal, journalCapacity, journalCount,
+            kFirstDMEMRestorePCICommand, kPowerJournalWriteEffectUnknown, 2,
+            kIOPCIConfigCommand, status.pciCommandRestored,
+            status.pciCommandBME, status.pciCommandRestored,
+            status.cumulativeHazards, kIOReturnNotPermitted);
+        status.failedOperation = kFirstDMEMRestorePCICommand;
+        return FirstDMEMTransportResult::PCICommandUnknown;
+    }
+    status.cumulativeHazards &= ~kHazardBMEPossible;
+    appendFirstDMEMJournal(journal, journalCapacity, journalCount,
+        kFirstDMEMRestorePCICommand, kPowerJournalSucceeded, 2,
+        kIOPCIConfigCommand, status.pciCommandRestored, status.pciCommandBME,
+        status.pciCommandRestored, status.cumulativeHazards, kIOReturnSuccess);
+    status.completedOperations++;
+
+    appendFirstDMEMJournal(journal, journalCapacity, journalCount,
+        kFirstDMEMPrePollIDDMAOWN, kPowerJournalIntent, 4, 0x1208,
+        status.pciCommandRestored, 0, 0, status.cumulativeHazards,
+        kIOReturnSuccess);
+    for (; status.iddmaPrePollCount < kIDDMAPollIterations;
+         status.iddmaPrePollCount++) {
+        status.iddmaControlBefore = OSReadLittleInt32(base, 0x1208);
+        if ((status.iddmaControlBefore & kIDDMAOwn) == 0)
+            break;
+        IODelay(kIDDMAPollIntervalMicroseconds);
+    }
+    if (status.iddmaPrePollCount == kIDDMAPollIterations) {
+        appendFirstDMEMJournal(journal, journalCapacity, journalCount,
+            kFirstDMEMPrePollIDDMAOWN, kPowerJournalPollTimedOut, 4, 0x1208,
+            status.pciCommandRestored, status.iddmaControlBefore,
+            status.iddmaControlBefore, status.cumulativeHazards, kIOReturnBusy);
+        status.failedOperation = kFirstDMEMPrePollIDDMAOWN;
+        return FirstDMEMTransportResult::IDDMAActive;
+    }
+    status.iddmaPrePollCount++;
+    appendFirstDMEMJournal(journal, journalCapacity, journalCount,
+        kFirstDMEMPrePollIDDMAOWN, kPowerJournalSucceeded, 4, 0x1208,
+        status.pciCommandRestored, status.iddmaControlBefore,
+        status.iddmaControlBefore, status.cumulativeHazards, kIOReturnSuccess);
+    status.completedOperations++;
+
+#define FIRST_DMEM_WRITE(_operation, _offset, _value) do { \
+    const UInt32 writeBefore = OSReadLittleInt32(base, (_offset)); \
+    appendFirstDMEMJournal(journal, journalCapacity, journalCount, \
+        (_operation), kPowerJournalIntent, 4, (_offset), \
+        status.pciCommandRestored, writeBefore, (_value), \
+        status.cumulativeHazards, kIOReturnSuccess); \
+    OSWriteLittleInt32(base, (_offset), (_value)); \
+    OSSynchronizeIO(); \
+    status.iddmaWriteCount++; \
+    appendFirstDMEMJournal(journal, journalCapacity, journalCount, \
+        (_operation), kPowerJournalSucceeded, 4, (_offset), \
+        status.pciCommandRestored, writeBefore, \
+        OSReadLittleInt32(base, (_offset)), status.cumulativeHazards, \
+        kIOReturnSuccess); \
+    status.completedOperations++; \
+} while (0)
+
+    FIRST_DMEM_WRITE(kFirstDMEMResetChecksum, 0x1208,
+                     status.iddmaControlBefore | kIDDMAChecksumReset);
+    status.checksumResetCount++;
+    FIRST_DMEM_WRITE(kFirstDMEMWriteSource, 0x1200, record.source);
+    if (OSReadLittleInt32(base, 0x1200) != record.source) {
+        status.failedOperation = kFirstDMEMWriteSource;
+        return FirstDMEMTransportResult::WriteEffectUnknown;
+    }
+    FIRST_DMEM_WRITE(kFirstDMEMWriteDestination, 0x1204,
+                     record.destination);
+    if (OSReadLittleInt32(base, 0x1204) != record.destination) {
+        status.failedOperation = kFirstDMEMWriteDestination;
+        return FirstDMEMTransportResult::WriteEffectUnknown;
+    }
+    status.cumulativeHazards |=
+        kHazardIDDMAPossible | kHazardFirmwareMemoryDirty;
+    FIRST_DMEM_WRITE(kFirstDMEMWriteControl, 0x1208, record.control);
+#undef FIRST_DMEM_WRITE
+
+    appendFirstDMEMJournal(journal, journalCapacity, journalCount,
+        kFirstDMEMPollIDDMAOWN, kPowerJournalIntent, 4, 0x1208,
+        status.pciCommandRestored, record.control, 0,
+        status.cumulativeHazards, kIOReturnSuccess);
+    for (; status.iddmaCompletionPollCount < kIDDMAPollIterations;
+         status.iddmaCompletionPollCount++) {
+        status.iddmaControlAfter = OSReadLittleInt32(base, 0x1208);
+        if ((status.iddmaControlAfter & kIDDMAOwn) == 0)
+            break;
+        IODelay(kIDDMAPollIntervalMicroseconds);
+    }
+    if (status.iddmaCompletionPollCount == kIDDMAPollIterations) {
+        appendFirstDMEMJournal(journal, journalCapacity, journalCount,
+            kFirstDMEMPollIDDMAOWN, kPowerJournalPollTimedOut, 4, 0x1208,
+            status.pciCommandRestored, record.control,
+            status.iddmaControlAfter, status.cumulativeHazards, kIOReturnBusy);
+        status.failedOperation = kFirstDMEMPollIDDMAOWN;
+        return FirstDMEMTransportResult::IDDMACompletionTimedOut;
+    }
+    status.iddmaCompletionPollCount++;
+    appendFirstDMEMJournal(journal, journalCapacity, journalCount,
+        kFirstDMEMPollIDDMAOWN, kPowerJournalSucceeded, 4, 0x1208,
+        status.pciCommandRestored, record.control, status.iddmaControlAfter,
+        status.cumulativeHazards, kIOReturnSuccess);
+    status.completedOperations++;
+
+    status.checksumStatus = status.iddmaControlAfter & kIDDMAChecksumStatus;
+    appendFirstDMEMJournal(journal, journalCapacity, journalCount,
+        kFirstDMEMCaptureChecksum, kPowerJournalIntent, 4, 0x1208,
+        status.pciCommandRestored, status.iddmaControlAfter,
+        status.checksumStatus, status.cumulativeHazards, kIOReturnSuccess);
+    appendFirstDMEMJournal(journal, journalCapacity, journalCount,
+        kFirstDMEMCaptureChecksum, kPowerJournalSucceeded, 4, 0x1208,
+        status.pciCommandRestored, status.iddmaControlAfter,
+        status.checksumStatus, status.cumulativeHazards, kIOReturnSuccess);
+    status.completedOperations++;
+    return FirstDMEMTransportResult::Completed;
+
+restore_pci_failure:
+    appendFirstDMEMJournal(journal, journalCapacity, journalCount,
+        kFirstDMEMRestorePCICommand, kPowerJournalIntent, 2,
+        kIOPCIConfigCommand, status.pciCommandBME, status.pciCommandBME,
+        status.pciCommandOriginal, status.cumulativeHazards, kIOReturnSuccess);
+    for (; status.bmeRestoreAttemptCount < 3;
+         status.bmeRestoreAttemptCount++) {
+        device->configWrite16(kIOPCIConfigCommand, status.pciCommandOriginal);
+        status.pciCommandRestored =
+            device->configRead16(kIOPCIConfigCommand);
+        if (status.pciCommandRestored == status.pciCommandOriginal)
+            break;
+        IODelay(50);
+    }
+    status.bmeRestoreAttemptCount++;
+    appendFirstDMEMJournal(journal, journalCapacity, journalCount,
+        kFirstDMEMRestorePCICommand,
+        status.pciCommandRestored == status.pciCommandOriginal ?
+            kPowerJournalSucceeded : kPowerJournalWriteEffectUnknown,
+        2, kIOPCIConfigCommand, status.pciCommandRestored,
+        status.pciCommandBME, status.pciCommandRestored,
+        status.cumulativeHazards,
+        status.pciCommandRestored == status.pciCommandOriginal ?
+            kIOReturnSuccess : kIOReturnNotPermitted);
+    if (status.pciCommandRestored != status.pciCommandOriginal)
+        return FirstDMEMTransportResult::PCICommandUnknown;
+    return status.failedOperation == kFirstDMEMValidateBeaconDoorbell ?
+        (ioStatus == kIOReturnSuccess ?
+            FirstDMEMTransportResult::BeaconCompletionTimedOut :
+            FirstDMEMTransportResult::SynchronizeFailed) :
+        FirstDMEMTransportResult::PCICommandUnknown;
+}
+
+FirmwareSetupExecutorResult executeFirmwareSetupContract(
+    IOPCIDevice *device, volatile UInt8 *base,
+    PowerExecutionJournalRecord *journal, size_t journalCapacity,
+    size_t &journalCount, UInt8 &completedWrites, UInt8 &completedPolls,
+    UInt8 &completedRestores, UInt8 &setupSelfClearCount,
+    UInt8 &restoreSelfClearCount, UInt8 &failedStep,
+    UInt16 &firmwareControlAfter, UInt32 &ddmaControlObserved,
+    UInt32 &rqpnControlAfter, bool firstDMEMArmed,
+    const FirmwareIDDMAPlanRecord *iddmaPlan, size_t iddmaPlanCount,
+    IOBufferMemoryDescriptor *stagingBuffer, IODMACommand *stagingCommand,
+    PreparedDMA *rings, UInt32 ringCount,
+    FirstDMEMTransportJournalRecord *transportJournal,
+    size_t transportJournalCapacity, size_t &transportJournalCount,
+    FirstDMEMTransportStatus &transportStatus,
+    FirstDMEMTransportResult &transportResult)
+{
+    journalCount = 0;
+    completedWrites = 0;
+    completedPolls = 0;
+    completedRestores = 0;
+    setupSelfClearCount = 0;
+    restoreSelfClearCount = 0;
+    failedStep = 0xffU;
+    firmwareControlAfter = 0xffffU;
+    ddmaControlObserved = 0xffffffffU;
+    rqpnControlAfter = 0xffffffffU;
+    if (!device || !base || !journal ||
+        journalCapacity < kFirmwareSetupExecutionStepCount * 2 ||
+        !validateFirmwareSetupExecutionContract())
+        return FirmwareSetupExecutorResult::ContractInvalid;
+    if (base[kRegisterCr] == 0xeaU)
+        return FirmwareSetupExecutorResult::PreconditionFailed;
+
+    UInt32 saved[7] = {};
+    bool savedValid[7] = {};
+    for (size_t index = 0; index < kFirmwareSetupExecutionStepCount; index++) {
+        if (index == 14 && firstDMEMArmed) {
+            transportResult = executeFirstDMEMTransport(
+                device, base, iddmaPlan, iddmaPlanCount, stagingBuffer,
+                stagingCommand, rings, ringCount, transportJournal,
+                transportJournalCapacity, transportJournalCount,
+                transportStatus);
+            if (transportResult != FirstDMEMTransportResult::Completed) {
+                failedStep = static_cast<UInt8>(index);
+                return FirmwareSetupExecutorResult::TransportFailed;
+            }
+        }
+        const RegisterPlanRecord &record =
+            kFirmwareSetupExecutionContract[index];
+        if ((device->configRead16(kIOPCIConfigCommand) &
+             kIOPCICommandBusMaster) != 0) {
+            failedStep = static_cast<UInt8>(index);
+            return FirmwareSetupExecutorResult::BMEInvariantFailed;
+        }
+        const UInt32 before = readRegisterWidth(
+            base, record.offset, record.width);
+        if ((record.flags & kPlanFlagBackupBefore) != 0) {
+            UInt32 backup = before;
+            if (record.restoreGroup == 3)
+                backup = 0x80000000U;
+            else if (record.restoreGroup == 5)
+                backup |= 0x80000000U;
+            saved[record.restoreGroup] = backup;
+            savedValid[record.restoreGroup] = true;
+        }
+
+        UInt32 projected = (before & ~record.mask) |
+            (record.value & record.mask);
+        if (record.operation == kPlanRestoreSaved) {
+            if (!savedValid[record.restoreGroup]) {
+                failedStep = static_cast<UInt8>(index);
+                return FirmwareSetupExecutorResult::ContractInvalid;
+            }
+            projected = saved[record.restoreGroup];
+        }
+        if (!appendFirmwareSetupJournal(
+                journal, journalCapacity, journalCount,
+                static_cast<UInt8>(index), kPowerJournalIntent, record,
+                before, projected, kIOReturnSuccess)) {
+            failedStep = static_cast<UInt8>(index);
+            return FirmwareSetupExecutorResult::ContractInvalid;
+        }
+
+        if (record.operation == kPlanPollOwnership) {
+            ddmaControlObserved = before;
+            if ((before & record.mask) != 0) {
+                appendFirmwareSetupJournal(
+                    journal, journalCapacity, journalCount,
+                    static_cast<UInt8>(index), kPowerJournalPollTimedOut,
+                    record, before, before,
+                    static_cast<UInt32>(kIOReturnBusy));
+                failedStep = static_cast<UInt8>(index);
+                return FirmwareSetupExecutorResult::DDMAActive;
+            }
+            if (!appendFirmwareSetupJournal(
+                    journal, journalCapacity, journalCount,
+                    static_cast<UInt8>(index), kPowerJournalSucceeded,
+                    record, before, before, kIOReturnSuccess)) {
+                failedStep = static_cast<UInt8>(index);
+                return FirmwareSetupExecutorResult::ContractInvalid;
+            }
+            completedPolls++;
+            continue;
+        }
+
+        if (record.width == 4)
+            OSWriteLittleInt32(base, record.offset, projected);
+        else if (record.width == 2)
+            OSWriteLittleInt16(base, record.offset,
+                               static_cast<UInt16>(projected));
+        else
+            base[record.offset] = static_cast<UInt8>(projected);
+        OSSynchronizeIO();
+        const UInt32 observed = readRegisterWidth(
+            base, record.offset, record.width);
+        const bool rqpnSelfClearingLoad = isRQPNSelfClearingLoad(record);
+        const UInt32 expectedTerminal = rqpnSelfClearingLoad ?
+            (projected & ~0x80000000U) : projected;
+        if ((device->configRead16(kIOPCIConfigCommand) &
+             kIOPCICommandBusMaster) != 0) {
+            appendFirmwareSetupJournal(
+                journal, journalCapacity, journalCount,
+                static_cast<UInt8>(index),
+                kPowerJournalWriteEffectUnknown, record, before, observed,
+                static_cast<UInt32>(kIOReturnNotPermitted));
+            failedStep = static_cast<UInt8>(index);
+            return FirmwareSetupExecutorResult::BMEInvariantFailed;
+        }
+        const UInt32 verificationMask = rqpnSelfClearingLoad ?
+            0xffffffffU : record.mask;
+        if ((observed & verificationMask) !=
+            (expectedTerminal & verificationMask)) {
+            appendFirmwareSetupJournal(
+                journal, journalCapacity, journalCount,
+                static_cast<UInt8>(index),
+                kPowerJournalWriteEffectUnknown, record, before, observed,
+                static_cast<UInt32>(kIOReturnIOError));
+            failedStep = static_cast<UInt8>(index);
+            return FirmwareSetupExecutorResult::WriteEffectUnknown;
+        }
+        if (!appendFirmwareSetupJournal(
+                journal, journalCapacity, journalCount,
+                static_cast<UInt8>(index), kPowerJournalSucceeded, record,
+                before, observed, kIOReturnSuccess)) {
+            failedStep = static_cast<UInt8>(index);
+            return FirmwareSetupExecutorResult::WriteEffectUnknown;
+        }
+        completedWrites++;
+        if (record.operation == kPlanRestoreSaved) {
+            completedRestores++;
+            if (rqpnSelfClearingLoad)
+                restoreSelfClearCount++;
+        } else if (rqpnSelfClearingLoad) {
+            setupSelfClearCount++;
+        }
+    }
+    firmwareControlAfter = OSReadLittleInt16(base, 0x0080);
+    rqpnControlAfter = OSReadLittleInt32(base, 0x022c);
+    return (firmwareControlAfter & 0x0001U) == 0 &&
+        setupSelfClearCount == 1 && restoreSelfClearCount == 1 &&
+        (rqpnControlAfter & 0x80000000U) == 0 ?
+        FirmwareSetupExecutorResult::Completed :
+        FirmwareSetupExecutorResult::WriteEffectUnknown;
+}
+
+const char *firmwareSetupExecutorResultName(FirmwareSetupExecutorResult result)
+{
+    switch (result) {
+    case FirmwareSetupExecutorResult::Disarmed:
+        return "Disarmed";
+    case FirmwareSetupExecutorResult::Completed:
+        return "Completed";
+    case FirmwareSetupExecutorResult::ContractInvalid:
+        return "ContractInvalid";
+    case FirmwareSetupExecutorResult::PreconditionFailed:
+        return "PreconditionFailed";
+    case FirmwareSetupExecutorResult::BMEInvariantFailed:
+        return "BMEInvariantFailed";
+    case FirmwareSetupExecutorResult::WriteEffectUnknown:
+        return "WriteEffectUnknown";
+    case FirmwareSetupExecutorResult::DDMAActive:
+        return "DDMAActive";
+    case FirmwareSetupExecutorResult::TransportFailed:
+        return "TransportFailed";
+    }
+    return "Unknown";
+}
+
+const char *firstDMEMTransportResultName(FirstDMEMTransportResult result)
+{
+    switch (result) {
+    case FirstDMEMTransportResult::Disarmed: return "Disarmed";
+    case FirstDMEMTransportResult::Completed: return "Completed";
+    case FirstDMEMTransportResult::ContractInvalid: return "ContractInvalid";
+    case FirstDMEMTransportResult::SynchronizeFailed: return "SynchronizeFailed";
+    case FirstDMEMTransportResult::PCICommandUnknown: return "PCICommandUnknown";
+    case FirstDMEMTransportResult::BeaconCompletionTimedOut:
+        return "BeaconCompletionTimedOut";
+    case FirstDMEMTransportResult::IDDMAActive: return "IDDMAActive";
+    case FirstDMEMTransportResult::IDDMACompletionTimedOut:
+        return "IDDMACompletionTimedOut";
+    case FirstDMEMTransportResult::WriteEffectUnknown:
+        return "WriteEffectUnknown";
     }
     return "Unknown";
 }
@@ -4165,6 +5458,16 @@ bool RTL8821CEProbe::start(IOService *provider)
     UInt32 ocTestMarker = 0;
     UInt32 executorEnable = 0;
     UInt32 executorConfirmation = 0;
+    UInt32 snapshotEnable = 0;
+    UInt32 snapshotConfirmation = 0;
+    UInt32 postPowerEnable = 0;
+    UInt32 postPowerConfirmation = 0;
+    UInt32 queueEnable = 0;
+    UInt32 queueConfirmation = 0;
+    UInt32 firmwareSetupEnable = 0;
+    UInt32 firmwareSetupConfirmation = 0;
+    UInt32 firstDMEMEnable = 0;
+    UInt32 firstDMEMConfirmation = 0;
     const bool ocTestMarkerPresent = PE_parse_boot_argn(
         "oc-test", &ocTestMarker, sizeof(ocTestMarker));
     const bool executorEnablePresent = PE_parse_boot_argn(
@@ -4172,16 +5475,97 @@ bool RTL8821CEProbe::start(IOService *provider)
     const bool executorConfirmationPresent = PE_parse_boot_argn(
         "rtl8821ce-power-v2-confirm", &executorConfirmation,
         sizeof(executorConfirmation));
+    const bool snapshotEnablePresent = PE_parse_boot_argn(
+        "rtl8821ce-snapshot-v1", &snapshotEnable, sizeof(snapshotEnable));
+    const bool snapshotConfirmationPresent = PE_parse_boot_argn(
+        "rtl8821ce-snapshot-v1-confirm", &snapshotConfirmation,
+        sizeof(snapshotConfirmation));
+    const bool postPowerEnablePresent = PE_parse_boot_argn(
+        "rtl8821ce-post-power-v1", &postPowerEnable,
+        sizeof(postPowerEnable));
+    const bool postPowerConfirmationPresent = PE_parse_boot_argn(
+        "rtl8821ce-post-power-v1-confirm", &postPowerConfirmation,
+        sizeof(postPowerConfirmation));
+    const bool queueEnablePresent = PE_parse_boot_argn(
+        "rtl8821ce-queue-v3", &queueEnable, sizeof(queueEnable));
+    const bool queueConfirmationPresent = PE_parse_boot_argn(
+        "rtl8821ce-queue-v3-confirm", &queueConfirmation,
+        sizeof(queueConfirmation));
+    const bool firmwareSetupEnablePresent = PE_parse_boot_argn(
+        "rtl8821ce-fw-setup-v2", &firmwareSetupEnable,
+        sizeof(firmwareSetupEnable));
+    const bool firmwareSetupConfirmationPresent = PE_parse_boot_argn(
+        "rtl8821ce-fw-setup-v2-confirm", &firmwareSetupConfirmation,
+        sizeof(firmwareSetupConfirmation));
+    const bool firstDMEMEnablePresent = PE_parse_boot_argn(
+        "rtl8821ce-dmem-v2", &firstDMEMEnable, sizeof(firstDMEMEnable));
+    const bool firstDMEMConfirmationPresent = PE_parse_boot_argn(
+        "rtl8821ce-dmem-v2-confirm", &firstDMEMConfirmation,
+        sizeof(firstDMEMConfirmation));
     const bool powerExecutorRequested = ocTestMarkerPresent && ocTestMarker == 1 &&
         executorEnablePresent && executorEnable == 1 &&
         executorConfirmationPresent &&
         executorConfirmation == kPowerExecutorContractConfirmation;
+    const bool postPowerSnapshotRequested = ocTestMarkerPresent &&
+        ocTestMarker == 1 && snapshotEnablePresent && snapshotEnable == 1 &&
+        snapshotConfirmationPresent &&
+        snapshotConfirmation == kPostPowerSnapshotConfirmation;
+    const bool postPowerExecutorRequested = ocTestMarkerPresent &&
+        ocTestMarker == 1 && postPowerEnablePresent && postPowerEnable == 1 &&
+        postPowerConfirmationPresent &&
+        postPowerConfirmation == kPostPowerExecutorConfirmation;
+    const bool queueExecutorRequested = ocTestMarkerPresent &&
+        ocTestMarker == 1 && queueEnablePresent && queueEnable == 1 &&
+        queueConfirmationPresent &&
+        queueConfirmation == kQueueExecutorConfirmation;
+    const bool firmwareSetupExecutorRequested = ocTestMarkerPresent &&
+        ocTestMarker == 1 && firmwareSetupEnablePresent &&
+        firmwareSetupEnable == 1 && firmwareSetupConfirmationPresent &&
+        firmwareSetupConfirmation == kFirmwareSetupExecutorConfirmation;
+    const bool firstDMEMExecutorRequested = ocTestMarkerPresent &&
+        ocTestMarker == 1 && firstDMEMEnablePresent && firstDMEMEnable == 1 &&
+        firstDMEMConfirmationPresent &&
+        firstDMEMConfirmation == kFirstDMEMExecutorConfirmation;
     const bool powerExecutorArmingConflict =
-        experimentRequested && powerExecutorRequested;
+        experimentRequested &&
+        (powerExecutorRequested || postPowerExecutorRequested ||
+         queueExecutorRequested || firmwareSetupExecutorRequested ||
+         firstDMEMExecutorRequested);
     const bool experimentArmed = kPowerExperimentBuildEnabled &&
         experimentRequested && !powerExecutorArmingConflict;
     const bool powerExecutorArmed = kPowerExecutorBuildEnabled &&
-        powerExecutorRequested && !powerExecutorArmingConflict;
+        (powerExecutorRequested || postPowerExecutorRequested ||
+         queueExecutorRequested || firmwareSetupExecutorRequested ||
+         firstDMEMExecutorRequested) &&
+        !powerExecutorArmingConflict;
+    const bool postPowerSnapshotArmed = kPostPowerSnapshotBuildEnabled &&
+        postPowerSnapshotRequested && !powerExecutorRequested &&
+        !postPowerExecutorRequested &&
+        !queueExecutorRequested && !firmwareSetupExecutorRequested &&
+        !firstDMEMExecutorRequested &&
+        !experimentRequested;
+    const bool postPowerExecutorArmed = kPostPowerExecutorBuildEnabled &&
+        (postPowerExecutorRequested || queueExecutorRequested ||
+         firmwareSetupExecutorRequested || firstDMEMExecutorRequested) &&
+        !powerExecutorRequested &&
+        !postPowerSnapshotRequested && !experimentRequested;
+    const bool queueExecutorArmed = kQueueExecutorBuildEnabled &&
+        (queueExecutorRequested || firmwareSetupExecutorRequested ||
+         firstDMEMExecutorRequested) &&
+        !powerExecutorRequested &&
+        !postPowerExecutorRequested && !postPowerSnapshotRequested &&
+        !experimentRequested;
+    const bool firmwareSetupExecutorArmed =
+        kFirmwareSetupExecutorBuildEnabled &&
+        (firmwareSetupExecutorRequested || firstDMEMExecutorRequested) &&
+        !queueExecutorRequested &&
+        !powerExecutorRequested && !postPowerExecutorRequested &&
+        !postPowerSnapshotRequested && !experimentRequested;
+    const bool firstDMEMExecutorArmed = kFirstDMEMExecutorBuildEnabled &&
+        firstDMEMExecutorRequested && !firmwareSetupExecutorRequested &&
+        !queueExecutorRequested && !powerExecutorRequested &&
+        !postPowerExecutorRequested && !postPowerSnapshotRequested &&
+        !experimentRequested;
 
     setProperty("PowerExperimentEnableArgumentPresent", experimentEnablePresent);
     setProperty("PowerExperimentConfirmationArgumentPresent",
@@ -4204,6 +5588,45 @@ bool RTL8821CEProbe::start(IOService *provider)
     setProperty("PowerExecutorV2OneShot", true);
     setProperty("PowerExecutorV2RetryAuthorized", false);
     setProperty("PowerExecutorV2PowerOffRecoveryAuthorized", false);
+    setProperty("PostPowerSnapshotBuildEnabled",
+                kPostPowerSnapshotBuildEnabled);
+    setProperty("PostPowerSnapshotRequested", postPowerSnapshotRequested);
+    setProperty("PostPowerSnapshotArmed", postPowerSnapshotArmed);
+    setProperty("PostPowerSnapshotEnableArgumentPresent",
+                snapshotEnablePresent);
+    setProperty("PostPowerSnapshotConfirmationArgumentPresent",
+                snapshotConfirmationPresent);
+    setProperty("PostPowerExecutorBuildEnabled",
+                kPostPowerExecutorBuildEnabled);
+    setProperty("PostPowerExecutorRequested", postPowerExecutorRequested);
+    setProperty("PostPowerExecutorArmed", postPowerExecutorArmed);
+    setProperty("PostPowerExecutorEnableArgumentPresent",
+                postPowerEnablePresent);
+    setProperty("PostPowerExecutorConfirmationArgumentPresent",
+                postPowerConfirmationPresent);
+    setProperty("QueueExecutorBuildEnabled", kQueueExecutorBuildEnabled);
+    setProperty("QueueExecutorRequested", queueExecutorRequested);
+    setProperty("QueueExecutorArmed", queueExecutorArmed);
+    setProperty("QueueExecutorEnableArgumentPresent", queueEnablePresent);
+    setProperty("QueueExecutorConfirmationArgumentPresent",
+                queueConfirmationPresent);
+    setProperty("FirmwareSetupExecutorBuildEnabled",
+                kFirmwareSetupExecutorBuildEnabled);
+    setProperty("FirmwareSetupExecutorRequested",
+                firmwareSetupExecutorRequested);
+    setProperty("FirmwareSetupExecutorArmed", firmwareSetupExecutorArmed);
+    setProperty("FirmwareSetupExecutorEnableArgumentPresent",
+                firmwareSetupEnablePresent);
+    setProperty("FirmwareSetupExecutorConfirmationArgumentPresent",
+                firmwareSetupConfirmationPresent);
+    setProperty("FirstDMEMExecutorBuildEnabled", kFirstDMEMExecutorBuildEnabled);
+    setProperty("FirstDMEMExecutorRequested", firstDMEMExecutorRequested);
+    setProperty("FirstDMEMExecutorArmed", firstDMEMExecutorArmed);
+    setProperty("FirstDMEMExecutorEnableArgumentPresent", firstDMEMEnablePresent);
+    setProperty("FirstDMEMExecutorConfirmationArgumentPresent",
+                firstDMEMConfirmationPresent);
+    setProperty("FirstDMEMExecutorExclusiveFromFirmwareSetupV2",
+                !firstDMEMExecutorArmed || !firmwareSetupExecutorRequested);
 
     const UInt64 firmwareSectionSize = static_cast<UInt64>(
         firmwareSectionEnd - firmwareSectionStart);
@@ -4280,6 +5703,22 @@ bool RTL8821CEProbe::start(IOService *provider)
     const bool powerExecutorSimulationValid = powerOnlyContractValid &&
         simulatePowerOnlyExecutor(powerOnlyContract, powerOnlyContractCount,
             powerExecutorSimulation);
+    const bool postPowerExecutionContractValid =
+        validatePostPowerExecutionContract();
+    PostPowerSimulationSummary postPowerSimulation = {};
+    const bool postPowerSimulationValid = postPowerExecutionContractValid &&
+        simulatePostPowerExecution(postPowerSimulation);
+    const bool powerExecutorStaticPreflightValid =
+        firmwareManifestValid && firmwareIDDMAPlanValid &&
+        lifecyclePlanValid && postPowerPlanValid &&
+        firmwareSetupPlanValid && reservedPagePlanValid &&
+        finalFIFOPlanValid && efuseParserModelValid && interruptPlanValid &&
+        dmaStateMachineValid && dmaPublicationPlanValid &&
+        rollbackPoliciesValid && serializedCommandContractsValid &&
+        executionJournalContractsValid && mappingExposureLedgerValid &&
+        synchronizationGenerationContractsValid &&
+        failureBoundaryClassificationValid && symbolicInterpreterValid &&
+        powerOnlyContractValid && powerExecutorSimulationValid;
 
     setProperty("FirmwareEmbedded", firmwareSectionSize != 0);
     setProperty("FirmwareManifestValid", firmwareManifestValid);
@@ -4330,6 +5769,21 @@ bool RTL8821CEProbe::start(IOService *provider)
     setProperty("PostPowerSystemPlanRecordCount",
                 static_cast<UInt64>(kPostPowerPlanCount), 8);
     setProperty("PostPowerSystemExecutionAuthorized", false);
+    setProperty("PostPowerExecutionSchemaVersion",
+                kPostPowerExecutionSchemaVersion, 8);
+    setProperty("PostPowerExecutionContractValid",
+                postPowerExecutionContractValid);
+    setProperty("PostPowerExecutionContractRecordCount",
+                static_cast<UInt64>(kPostPowerExecutionContractCount), 8);
+    setProperty("PostPowerExecutionSimulationValid",
+                postPowerSimulationValid);
+    setProperty("PostPowerExecutionSimulationScenarioCount",
+                postPowerSimulation.scenarioCount, 16);
+    setProperty("PostPowerExecutionAuthorized", false);
+    setProperty("PostPowerExecutionAttempted", false);
+    setProperty("PostPowerExecutionRequiresMACPowered", true);
+    setProperty("PostPowerExecutionRequiresBusMasterDisabled", true);
+    setProperty("PostPowerExecutionFailureRecovery", "ColdPowerRemoval");
     setProperty("FirmwareTemporarySetupPlanValid", firmwareSetupPlanValid);
     setProperty("FirmwareTemporarySetupPlanRecordCount",
                 static_cast<UInt64>(kFirmwareSetupPlanCount), 8);
@@ -4338,6 +5792,18 @@ bool RTL8821CEProbe::start(IOService *provider)
     setProperty("FirmwareTemporarySetupFailureCleanupRecordCount",
                 static_cast<UInt64>(2), 8);
     setProperty("FirmwareTemporarySetupExecutionAuthorized", false);
+    setProperty("FirmwareSetupExecutionContractValid",
+                validateFirmwareSetupExecutionContract());
+    setProperty("FirmwareSetupExecutionContractRecordCount",
+                static_cast<UInt64>(kFirmwareSetupExecutionStepCount), 8);
+    setProperty("FirmwareSetupExecutorBMEEnabled", firstDMEMExecutorArmed);
+    setProperty("FirmwareSetupExecutorCPUReleaseAuthorized", false);
+    setProperty("FirmwareSetupExecutorBeaconOWNAuthorized", firstDMEMExecutorArmed);
+    setProperty("FirmwareSetupExecutorBeaconDoorbellAuthorized",
+                firstDMEMExecutorArmed);
+    setProperty("FirmwareSetupExecutorIDDMAAuthorized", firstDMEMExecutorArmed);
+    setProperty("FirmwareSetupExecutorInterruptAuthorized", false);
+    setProperty("FirmwareSetupExecutorFailureRecovery", "ColdPowerRemoval");
     setProperty("RegisterPlanSchemaVersion", kRegisterPlanSchemaVersion, 8);
     setProperty("ReservedPageTransactionPlanValid", reservedPagePlanValid);
     setProperty("ReservedPageTransactionPlanRecordCount",
@@ -4567,11 +6033,10 @@ bool RTL8821CEProbe::start(IOService *provider)
     if (dmaTemplateValid)
         setProperty("FirmwareTransportBlocker", "PersistentRingNotDeviceConfigured");
 
-    IOMemoryMap *map = device->mapDeviceMemoryWithRegister(
-        kIOPCIConfigBaseAddress2,
-        kIOMapInhibitCache |
-            ((experimentArmed || powerExecutorArmed) ? 0 : kIOMapReadOnly));
+    IOMemoryMap *map = nullptr;
     bool mmioValid = false;
+    bool powerSequenceEligible = false;
+    bool alreadyPoweredSnapshotPath = false;
     bool sequenceValidated = false;
     UInt32 sysCfg1 = 0xffffffffU;
     UInt8 cr = 0xffU;
@@ -4603,6 +6068,49 @@ bool RTL8821CEProbe::start(IOService *provider)
     UInt8 powerExecutorCompletedPolls = 0;
     UInt8 powerExecutorFailedStep = 0xffU;
     UInt8 powerExecutorMacAfter = 0xffU;
+    PostPowerSnapshotRecord
+        postPowerSnapshot[kPostPowerSnapshotCount] = {};
+    UInt8 postPowerSnapshotStableCount = 0;
+    bool postPowerSnapshotValid = false;
+    PostPowerExecutorResult postPowerExecutorResult =
+        PostPowerExecutorResult::Disarmed;
+    PowerExecutionJournalRecord
+        postPowerExecutionJournal[kPostPowerExecutionJournalCapacity] = {};
+    size_t postPowerExecutionJournalCount = 0;
+    UInt8 postPowerCompletedWrites = 0;
+    UInt8 postPowerConditionalSkips = 0;
+    UInt8 postPowerFailedStep = 0xffU;
+    QueueExecutorResult queueExecutorResult = QueueExecutorResult::Disarmed;
+    PowerExecutionJournalRecord
+        queueExecutionJournal[kQueueExecutionJournalCapacity] = {};
+    size_t queueExecutionJournalCount = 0;
+    UInt8 queueCompletedWrites = 0;
+    UInt8 queueFailedStep = 0xffU;
+    UInt8 queueSynchronizedRingCount = 0;
+    UInt8 queueCommandReadbackCount = 0;
+    UInt8 queueRWPTRCommandReadbackCount = 0;
+    UInt8 queueH2CCommandReadbackCount = 0;
+    UInt32 queueDMAControlObserved = 0xffffffffU;
+    FirmwareSetupExecutorResult firmwareSetupExecutorResult =
+        FirmwareSetupExecutorResult::Disarmed;
+    PowerExecutionJournalRecord
+        firmwareSetupExecutionJournal[kFirmwareSetupExecutionJournalCapacity] = {};
+    size_t firmwareSetupExecutionJournalCount = 0;
+    UInt8 firmwareSetupCompletedWrites = 0;
+    UInt8 firmwareSetupCompletedPolls = 0;
+    UInt8 firmwareSetupCompletedRestores = 0;
+    UInt8 firmwareSetupSetupSelfClearCount = 0;
+    UInt8 firmwareSetupRestoreSelfClearCount = 0;
+    UInt8 firmwareSetupFailedStep = 0xffU;
+    UInt16 firmwareSetupControlAfter = 0xffffU;
+    UInt32 firmwareSetupDDMAControlObserved = 0xffffffffU;
+    UInt32 firmwareSetupRQPNControlAfter = 0xffffffffU;
+    FirstDMEMTransportResult firstDMEMTransportResult =
+        FirstDMEMTransportResult::Disarmed;
+    FirstDMEMTransportJournalRecord
+        firstDMEMTransportJournal[kFirstDMEMTransportJournalCapacity] = {};
+    size_t firstDMEMTransportJournalCount = 0;
+    FirstDMEMTransportStatus firstDMEMTransportStatus = {};
     PreSystemSnapshot preSystem = {};
     bool preSystemStable = false;
     QueueRegisterSnapshot queueSnapshot = {};
@@ -4622,8 +6130,51 @@ bool RTL8821CEProbe::start(IOService *provider)
     UInt8 firmwareRegisterBaselineStableCount = 0;
     UInt16 trxAllocationPCICommandBefore = 0xffffU;
     UInt16 trxAllocationPCICommandAfter = 0xffffU;
+    UInt64 runtimeFailureMask = 0;
+
+    trxAllocationPCICommandBefore =
+        device->configRead16(kIOPCIConfigCommand);
+    if ((trxAllocationPCICommandBefore & kIOPCICommandBusMaster) == 0) {
+        PreparedDMA *retainedRings = nullptr;
+        PreparedDMA *retainedPayloads = nullptr;
+        preparePersistentTRXAllocation(
+            trxAllocation, retainedRings, retainedPayloads);
+        if (trxAllocation.allocationComplete) {
+            trxRings_ = retainedRings;
+            trxPayloads_ = retainedPayloads;
+            trxRingCount_ = trxAllocation.ringMappingCount;
+            trxPayloadCount_ = trxAllocation.payloadMappingCount;
+            retainedBeaconRingValid = materializeRetainedBeaconRing(
+                retainedRings, trxRingCount_, descriptorBuffer_,
+                retainedBeaconRingAddress);
+            trxDevicePlanValid = retainedBeaconRingValid &&
+                buildTRXDevicePlan(
+                    retainedRings, trxRingCount_, trxDevicePlan,
+                    kTRXDevicePlanCapacity, trxDevicePlanCount,
+                    trxDevicePlanBaseCount, trxDevicePlanEntryCount);
+        }
+    }
+    trxAllocationPCICommandAfter =
+        device->configRead16(kIOPCIConfigCommand);
+    if (trxAllocationPCICommandAfter != trxAllocationPCICommandBefore ||
+        (trxAllocationPCICommandAfter & kIOPCICommandBusMaster) != 0) {
+        runtimeFailureMask |= kDiagnosticTRXPCICommand;
+    }
+    if (trxAllocation.allocationComplete &&
+        (trxRingCount_ != kTRXResourceCount ||
+         trxPayloadCount_ != kRXRingEntries ||
+         !retainedBeaconRingValid || !trxDevicePlanValid ||
+         !firmwareIDDMAPlanValid)) {
+        runtimeFailureMask |= kDiagnosticTRXPlan;
+    }
+
+    map = device->mapDeviceMemoryWithRegister(
+        kIOPCIConfigBaseAddress2,
+        kIOMapInhibitCache |
+            ((experimentArmed || powerExecutorArmed) ? 0 : kIOMapReadOnly));
 
     if (!map) {
+        runtimeFailureMask |= kDiagnosticMapMissing;
         IOLog("RTL8821CEProbe: failed to map BAR2\n");
     } else {
         const IOVirtualAddress address = map->getVirtualAddress();
@@ -4633,6 +6184,7 @@ bool RTL8821CEProbe::start(IOService *provider)
         if (address == 0 || length != 0x10000 || 0x03d9 >= length ||
             kRegisterCr >= length ||
             sizeof(UInt32) > length - kRegisterSysCfg1) {
+            runtimeFailureMask |= kDiagnosticMapShape;
             IOLog("RTL8821CEProbe: BAR2 mapping is too short or invalid (length 0x%llx)\n",
                   static_cast<UInt64>(length));
         } else {
@@ -4642,6 +6194,7 @@ bool RTL8821CEProbe::start(IOService *provider)
             setProperty("PCICommandDuringMMIO", activeCommand, 16);
 
             if ((activeCommand & kCommandDecodeMask) != kIOPCICommandMemorySpace) {
+                runtimeFailureMask |= kDiagnosticMemoryDecode;
                 IOLog("RTL8821CEProbe: unsafe PCI command after memory enable: 0x%04x\n",
                       activeCommand);
             } else {
@@ -4802,7 +6355,7 @@ bool RTL8821CEProbe::start(IOService *provider)
                 queuePlan[1] = {
                     1, 4, static_cast<UInt16>(kRegisterBeaconRingBase),
                     queueSnapshot.beaconRingBase, 0xffffffffU,
-                    dmaTemplate.descriptorAddress, dmaTemplate.descriptorAddress,
+                    retainedBeaconRingAddress, retainedBeaconRingAddress,
                 };
                 queuePlan[2] = {
                     2, 4, static_cast<UInt16>(kRegisterRWPTRClear),
@@ -4815,12 +6368,14 @@ bool RTL8821CEProbe::start(IOService *provider)
                     projectedBeaconWork,
                 };
                 queuePlanValid = queueSnapshotStable && dmaTemplateValid &&
-                    dmaTemplate.descriptorAddress != 0 &&
-                    (dmaTemplate.descriptorAddress & (kDMAAlignment - 1)) == 0;
+                    retainedBeaconRingValid && trxDevicePlanValid &&
+                    retainedBeaconRingAddress != 0 &&
+                    (retainedBeaconRingAddress & (kDMAAlignment - 1)) == 0;
 
                 mmioValid = sequenceValidated && dryRunPlanValidated &&
                             sysCfg1 == sysCfg1Repeat &&
-                            sysCfg1 == kExpectedSysCfg1 && cr == 0xeaU &&
+                            (sysCfg1 & kSysCfg1IdentityMask) ==
+                                (kExpectedSysCfg1 & kSysCfg1IdentityMask) &&
                             crRepeat == cr && revision == 0 &&
                              subsystemVendor == 0x10ec && subsystem == 0xc821 &&
                              preSystemStable && queuePlanValid && command == 0 &&
@@ -4829,17 +6384,54 @@ bool RTL8821CEProbe::start(IOService *provider)
                             bars[2] == 0xfce00004U && bars[3] == 0 &&
                             preSystem.reservedControl == 0x00 &&
                             preSystem.hciOptionControl == 0x00000435 &&
-                            preSystem.padControl1 == 0x06243000 &&
+                            (preSystem.padControl1 & ~0x30000000U) ==
+                                0x06243000 &&
                             preSystem.ledConfig == 0x00628282 &&
-                            preSystem.gpioMuxConfig == 0x00000000 &&
-                            preSystem.systemFunctionEnable == 0xdc &&
-                            preSystem.rfControl == 0x00 &&
-                            preSystem.wlrf1 == 0x00000000 &&
-                            preSystem.systemPowerControl == 0x12 &&
-                            preSystem.firmwareControl == 0x0001 &&
-                            preSystem.rpwm == 0x00;
+                             preSystem.systemFunctionEnable == 0xdc &&
+                             preSystem.rfControl == 0x00 &&
+                             preSystem.systemPowerControl == 0x12 &&
+                             trxAllocationPCICommandAfter ==
+                                 trxAllocationPCICommandBefore &&
+                             (trxAllocationPCICommandAfter &
+                              kIOPCICommandBusMaster) == 0;
+                powerSequenceEligible = mmioValid && cr == 0xeaU;
+                alreadyPoweredSnapshotPath = mmioValid && cr != 0xeaU;
+                if (!sequenceValidated)
+                    runtimeFailureMask |= kDiagnosticPowerSequence;
+                if (!dryRunPlanValidated)
+                    runtimeFailureMask |= kDiagnosticDryRunPlan;
+                if (sysCfg1 != sysCfg1Repeat)
+                    runtimeFailureMask |= kDiagnosticSysCfgUnstable;
+                if ((sysCfg1 & kSysCfg1IdentityMask) !=
+                    (kExpectedSysCfg1 & kSysCfg1IdentityMask))
+                    runtimeFailureMask |= kDiagnosticSysCfgUnexpected;
+                if (crRepeat != cr)
+                    runtimeFailureMask |= kDiagnosticMACUnstable;
+                if (revision != 0 || subsystemVendor != 0x10ec ||
+                    subsystem != 0xc821)
+                    runtimeFailureMask |= kDiagnosticPCIIdentity;
+                if (!preSystemStable)
+                    runtimeFailureMask |= kDiagnosticPreSystemUnstable;
+                if (!queuePlanValid)
+                    runtimeFailureMask |= kDiagnosticQueuePlan;
+                if (command != 0)
+                    runtimeFailureMask |= kDiagnosticInitialPCICommand;
+                if (firmwareRegisterBaselineStableCount !=
+                    kFirmwareRegisterBaselineCount)
+                    runtimeFailureMask |= kDiagnosticFirmwareBaseline;
+                if (bars[2] != 0xfce00004U || bars[3] != 0)
+                    runtimeFailureMask |= kDiagnosticBARIdentity;
+                if (preSystem.reservedControl != 0x00 ||
+                    preSystem.hciOptionControl != 0x00000435 ||
+                    (preSystem.padControl1 & ~0x30000000U) !=
+                        0x06243000 ||
+                    preSystem.ledConfig != 0x00628282 ||
+                    preSystem.systemFunctionEnable != 0xdc ||
+                    preSystem.rfControl != 0x00 ||
+                    preSystem.systemPowerControl != 0x12)
+                    runtimeFailureMask |= kDiagnosticPreSystemValues;
 
-                if (mmioValid && experimentArmed) {
+                if (powerSequenceEligible && experimentArmed) {
                     volatile UInt8 *writableBase =
                         reinterpret_cast<volatile UInt8 *>(address);
                     experimentResult = executePowerOnExperiment(
@@ -4847,8 +6439,8 @@ bool RTL8821CEProbe::start(IOService *provider)
                         experimentCompletedPolls, experimentFailedCommand,
                         experimentMacAfter);
                 }
-                if (mmioValid && powerExecutorArmed &&
-                    powerOnlyContractValid && powerExecutorSimulationValid &&
+                if (powerSequenceEligible && powerExecutorArmed &&
+                    powerExecutorStaticPreflightValid &&
                     !experimentArmed) {
                     volatile UInt8 *writableBase =
                         reinterpret_cast<volatile UInt8 *>(address);
@@ -4862,6 +6454,83 @@ bool RTL8821CEProbe::start(IOService *provider)
                         powerExecutorFailedStep, powerExecutorMacAfter);
                     powerExecutorAttempted_ = powerExecutionJournalCount != 0;
                     powerExecutorQuarantined_ = powerExecutorAttempted_;
+                    if (powerExecutorResult == PowerExecutorResult::Completed)
+                        postPowerSnapshotValid = collectPostPowerSnapshot(
+                            writableBase, postPowerSnapshot,
+                            kPostPowerSnapshotCount,
+                            postPowerSnapshotStableCount);
+                    if (powerExecutorResult == PowerExecutorResult::Completed &&
+                        postPowerSnapshotValid && postPowerExecutorArmed) {
+                        postPowerExecutorResult = executePostPowerContract(
+                            writableBase, kPostPowerExecutionContract,
+                            kPostPowerExecutionContractCount,
+                            postPowerExecutionJournal,
+                            kPostPowerExecutionJournalCapacity,
+                            postPowerExecutionJournalCount,
+                            postPowerCompletedWrites,
+                            postPowerConditionalSkips,
+                            postPowerFailedStep);
+                        powerExecutorQuarantined_ = true;
+                        if (postPowerExecutorResult ==
+                                PostPowerExecutorResult::Completed &&
+                            (queueExecutorArmed || firmwareSetupExecutorArmed ||
+                             firstDMEMExecutorArmed) &&
+                            trxDevicePlanValid) {
+                            queueExecutorResult = executeQueueContract(
+                                device, writableBase, trxDevicePlan,
+                                trxDevicePlanCount,
+                                static_cast<PreparedDMA *>(trxRings_),
+                                trxRingCount_, queueExecutionJournal,
+                                kQueueExecutionJournalCapacity,
+                                queueExecutionJournalCount,
+                                queueCompletedWrites, queueFailedStep,
+                                queueSynchronizedRingCount,
+                                queueCommandReadbackCount,
+                                queueRWPTRCommandReadbackCount,
+                                queueH2CCommandReadbackCount,
+                                queueDMAControlObserved);
+                            if (queueExecutorResult ==
+                                    QueueExecutorResult::Completed &&
+                                (firmwareSetupExecutorArmed ||
+                                 firstDMEMExecutorArmed)) {
+                                firmwareSetupExecutorResult =
+                                    executeFirmwareSetupContract(
+                                        device, writableBase,
+                                        firmwareSetupExecutionJournal,
+                                        kFirmwareSetupExecutionJournalCapacity,
+                                        firmwareSetupExecutionJournalCount,
+                                        firmwareSetupCompletedWrites,
+                                        firmwareSetupCompletedPolls,
+                                        firmwareSetupCompletedRestores,
+                                        firmwareSetupSetupSelfClearCount,
+                                        firmwareSetupRestoreSelfClearCount,
+                                        firmwareSetupFailedStep,
+                                         firmwareSetupControlAfter,
+                                         firmwareSetupDDMAControlObserved,
+                                         firmwareSetupRQPNControlAfter,
+                                         firstDMEMExecutorArmed,
+                                         firmwareIDDMAPlan,
+                                         firmwareIDDMAPlanCount,
+                                         stagingBuffer_, stagingCommand_,
+                                         static_cast<PreparedDMA *>(trxRings_),
+                                         trxRingCount_,
+                                         firstDMEMTransportJournal,
+                                         kFirstDMEMTransportJournalCapacity,
+                                         firstDMEMTransportJournalCount,
+                                         firstDMEMTransportStatus,
+                                         firstDMEMTransportResult);
+                            }
+                        }
+                    }
+                }
+                if (alreadyPoweredSnapshotPath && postPowerSnapshotArmed &&
+                    powerExecutorStaticPreflightValid && !experimentArmed) {
+                    powerExecutorResult =
+                        PowerExecutorResult::AlreadyPoweredSnapshot;
+                    powerExecutorMacAfter = cr;
+                    postPowerSnapshotValid = collectPostPowerSnapshot(
+                        base, postPowerSnapshot, kPostPowerSnapshotCount,
+                        postPowerSnapshotStableCount);
                 }
 
             }
@@ -4876,6 +6545,7 @@ bool RTL8821CEProbe::start(IOService *provider)
             }
             setProperty("PCICommandRestored", restoredCommand, 16);
             if (restoredCommand != command) {
+                runtimeFailureMask |= kDiagnosticPCIRestore;
                 IOLog("RTL8821CEProbe: failed to restore PCI command (wanted 0x%04x, got 0x%04x)\n",
                       command, restoredCommand);
                 mmioValid = false;
@@ -4885,51 +6555,74 @@ bool RTL8821CEProbe::start(IOService *provider)
         map->release();
     }
 
-    if (mmioValid && !powerExecutorQuarantined_) {
-        trxAllocationPCICommandBefore =
-            device->configRead16(kIOPCIConfigCommand);
-        if ((trxAllocationPCICommandBefore & kIOPCICommandBusMaster) == 0) {
-            PreparedDMA *retainedRings = nullptr;
-            PreparedDMA *retainedPayloads = nullptr;
-            preparePersistentTRXAllocation(
-                trxAllocation, retainedRings, retainedPayloads);
-            if (trxAllocation.allocationComplete) {
-                trxRings_ = retainedRings;
-                trxPayloads_ = retainedPayloads;
-                trxRingCount_ = trxAllocation.ringMappingCount;
-                trxPayloadCount_ = trxAllocation.payloadMappingCount;
-                retainedBeaconRingValid = materializeRetainedBeaconRing(
-                    retainedRings, trxRingCount_, descriptorBuffer_,
-                    retainedBeaconRingAddress);
-                trxDevicePlanValid = retainedBeaconRingValid &&
-                    buildTRXDevicePlan(
-                        retainedRings, trxRingCount_, trxDevicePlan,
-                        kTRXDevicePlanCapacity, trxDevicePlanCount,
-                        trxDevicePlanBaseCount, trxDevicePlanEntryCount);
-                if (retainedBeaconRingValid) {
-                    queuePlan[1].value = retainedBeaconRingAddress;
-                    queuePlan[1].projected = retainedBeaconRingAddress;
-                    queuePlanValid = queuePlanValid &&
-                        retainedBeaconRingAddress != 0 &&
-                        (retainedBeaconRingAddress &
-                         (kDMAAlignment - 1)) == 0;
-                }
-            }
-        }
-        trxAllocationPCICommandAfter =
-            device->configRead16(kIOPCIConfigCommand);
-        if (trxAllocationPCICommandAfter != trxAllocationPCICommandBefore ||
-            (trxAllocationPCICommandAfter & kIOPCICommandBusMaster) != 0)
-            mmioValid = false;
-        if (trxAllocation.allocationComplete &&
-            (trxRingCount_ != kTRXResourceCount ||
-             trxPayloadCount_ != kRXRingEntries ||
-             !retainedBeaconRingValid || !trxDevicePlanValid ||
-             !firmwareIDDMAPlanValid))
-            mmioValid = false;
-    }
-
     device->close(this);
+    device->setProperty("RTL8821CEDiagnosticSchemaVersion",
+                        kRuntimeDiagnosticSchemaVersion, 8);
+    device->setProperty("RTL8821CEDiagnosticFailureMask",
+                        runtimeFailureMask, 64);
+    device->setProperty("RTL8821CEDiagnosticMMIOValid", mmioValid);
+    device->setProperty("RTL8821CEDiagnosticSymbolicInterpreterValid",
+                        symbolicInterpreterValid);
+    device->setProperty("RTL8821CEDiagnosticSymbolicTraceCount",
+                        symbolicInterpreterSummary.totalTraceCount, 32);
+    device->setProperty("RTL8821CEDiagnosticRejectedMutationCount",
+                        symbolicInterpreterSummary.rejectedMutationCount, 32);
+    device->setProperty("RTL8821CEDiagnosticExpectedRejectedMutationCount",
+                        symbolicInterpreterSummary.expectedRejectedMutationCount,
+                        32);
+    device->setProperty("RTL8821CEDiagnosticPowerContractValid",
+                        powerOnlyContractValid);
+    device->setProperty("RTL8821CEDiagnosticPowerSimulationValid",
+                        powerExecutorSimulationValid);
+    device->setProperty("RTL8821CEDiagnosticPowerAttempted",
+                        powerExecutorAttempted_);
+    device->setProperty("RTL8821CEDiagnosticAlreadyPoweredSnapshotPath",
+                        alreadyPoweredSnapshotPath && postPowerSnapshotArmed);
+    device->setProperty("RTL8821CEDiagnosticSYS_CFG1", sysCfg1, 32);
+    device->setProperty("RTL8821CEDiagnosticMACControl", cr, 8);
+    device->setProperty("RTL8821CEDiagnosticPreSystemStable", preSystemStable);
+    device->setProperty("RTL8821CEDiagnosticRSV_CTRL",
+                        preSystem.reservedControl, 8);
+    device->setProperty("RTL8821CEDiagnosticHCI_OPT_CTRL",
+                        preSystem.hciOptionControl, 32);
+    device->setProperty("RTL8821CEDiagnosticPAD_CTRL1",
+                        preSystem.padControl1, 32);
+    device->setProperty("RTL8821CEDiagnosticLED_CFG",
+                        preSystem.ledConfig, 32);
+    device->setProperty("RTL8821CEDiagnosticGPIO_MUXCFG",
+                        preSystem.gpioMuxConfig, 32);
+    device->setProperty("RTL8821CEDiagnosticSYS_FUNC_EN",
+                        preSystem.systemFunctionEnable, 8);
+    device->setProperty("RTL8821CEDiagnosticRF_CTRL",
+                        preSystem.rfControl, 8);
+    device->setProperty("RTL8821CEDiagnosticWLRF1", preSystem.wlrf1, 32);
+    device->setProperty("RTL8821CEDiagnosticSYS_PWR_CTRL",
+                        preSystem.systemPowerControl, 8);
+    device->setProperty("RTL8821CEDiagnosticMCUFW_CTRL",
+                        preSystem.firmwareControl, 16);
+    device->setProperty("RTL8821CEDiagnosticRPWM", preSystem.rpwm, 8);
+    device->setProperty("RTL8821CEDiagnosticFirmwareBaselineStableCount",
+                        firmwareRegisterBaselineStableCount, 8);
+    const bool powerOnlyPreflightReady = mmioValid &&
+        symbolicInterpreterValid && powerOnlyContractValid &&
+        powerExecutorSimulationValid && lifecyclePlanValid &&
+        postPowerPlanValid && firmwareSetupPlanValid &&
+        reservedPagePlanValid && finalFIFOPlanValid && interruptPlanValid &&
+        dmaStateMachineValid && dmaPublicationPlanValid &&
+        rollbackPoliciesValid && serializedCommandContractsValid &&
+        executionJournalContractsValid && mappingExposureLedgerValid &&
+        synchronizationGenerationContractsValid &&
+        firmwareRegisterBaselineStableCount ==
+            kFirmwareRegisterBaselineCount &&
+        command == 0 && cr == 0xeaU && !powerExecutorAttempted_ &&
+        !experimentArmed && !powerExecutorArmed;
+    const bool postPowerSnapshotPreflightReady = mmioValid &&
+        powerExecutorStaticPreflightValid && cr != 0xeaU && command == 0 &&
+        !powerExecutorAttempted_;
+    device->setProperty("RTL8821CEDiagnosticPowerOnlyPreflightReady",
+                        powerOnlyPreflightReady);
+    device->setProperty("RTL8821CEDiagnosticSnapshotPreflightReady",
+                        postPowerSnapshotPreflightReady);
 
     if (!mmioValid) {
         IOLog("RTL8821CEProbe: MMIO identity probe failed safely\n");
@@ -4947,7 +6640,8 @@ bool RTL8821CEProbe::start(IOService *provider)
     setProperty("MACControl", cr, 8);
     setProperty("MACPowerState", cr == 0xeaU ? "Off" : "PreviouslyActiveOrUnknown");
     setProperty("MMIOProbeComplete", kOSBooleanTrue);
-    setProperty("PowerCycleAttempted", experimentArmed || powerExecutorArmed);
+    setProperty("PowerCycleAttempted",
+                experimentArmed || powerExecutorAttempted_);
     setProperty("PowerSequenceValidated", sequenceValidated);
     setProperty("PlannedPowerWriteCount", plannedWriteCount, 8);
     setProperty("PowerFSMDryRunComplete", dryRunPlanValidated);
@@ -5005,11 +6699,19 @@ bool RTL8821CEProbe::start(IOService *provider)
     setProperty("PowerExecutorV2ContractWriteCount", powerOnlyWriteCount, 16);
     setProperty("PowerExecutorV2ContractPollCount", powerOnlyPollCount, 16);
     setProperty("PowerExecutorV2SimulationValid", powerExecutorSimulationValid);
+    setProperty("PowerExecutorV2StaticPreflightValid",
+                powerExecutorStaticPreflightValid);
+    setProperty("PowerExecutorV2PreflightReady", powerOnlyPreflightReady);
+    setProperty("PostPowerSnapshotPreflightReady",
+                postPowerSnapshotPreflightReady);
+    setProperty("PowerExecutorV2PreflightIsExecutionAuthorization", false);
     setProperty("PowerExecutorV2SimulationScenarioCount",
                 powerExecutorSimulation.scenarioCount, 16);
     setProperty("PowerExecutorV2ExecutionAuthorized", powerExecutorArmed);
     setProperty("PowerExecutorV2ExecutionAttempted",
                 powerExecutorAttempted_);
+    setProperty("PowerExecutorV2AlreadyPoweredSnapshotPath",
+                alreadyPoweredSnapshotPath && postPowerSnapshotArmed);
     setProperty("PowerExecutorV2Result",
                 powerExecutorResultName(powerExecutorResult));
     setProperty("PowerExecutorV2JournalRecordCount",
@@ -5023,6 +6725,33 @@ bool RTL8821CEProbe::start(IOService *provider)
                 powerExecutorCompletedPolls, 8);
     setProperty("PowerExecutorV2FailedStep", powerExecutorFailedStep, 8);
     setProperty("PowerExecutorV2MACAfter", powerExecutorMacAfter, 8);
+    setProperty("PostPowerSnapshotAttempted",
+                powerExecutorResult == PowerExecutorResult::Completed ||
+                    powerExecutorResult ==
+                        PowerExecutorResult::AlreadyPoweredSnapshot);
+    setProperty("PostPowerSnapshotReadOnly", true);
+    setProperty("PostPowerSnapshotValid", postPowerSnapshotValid);
+    setProperty("PostPowerSnapshotRecordCount",
+                static_cast<UInt64>(kPostPowerSnapshotCount), 8);
+    setProperty("PostPowerSnapshotStableCount",
+                postPowerSnapshotStableCount, 8);
+    setProperty("PostPowerExecutorResult",
+                postPowerExecutorResultName(postPowerExecutorResult));
+    setProperty("PostPowerExecutorExecutionAuthorized",
+                postPowerExecutorArmed);
+    setProperty("PostPowerExecutorExecutionAttempted",
+                postPowerExecutionJournalCount != 0);
+    setProperty("PostPowerExecutorJournalRecordCount",
+                static_cast<UInt64>(postPowerExecutionJournalCount), 8);
+    setProperty("PostPowerExecutorCompletedWriteCount",
+                postPowerCompletedWrites, 8);
+    setProperty("PostPowerExecutorConditionalSkipCount",
+                postPowerConditionalSkips, 8);
+    setProperty("PostPowerExecutorFailedStep", postPowerFailedStep, 8);
+    setProperty("PostPowerExecutorBusMasteringRequired", false);
+    setProperty("PostPowerExecutorDMAAuthorized", false);
+    setProperty("PostPowerExecutorFirmwareUploadAuthorized", false);
+    setProperty("PostPowerExecutorInterruptAuthorized", false);
     setProperty("PowerExecutorV2Quarantined",
                 powerExecutorQuarantined_);
     setProperty("PowerExecutorV2PostIntentHardwareWorkAuthorized", false);
@@ -5034,8 +6763,10 @@ bool RTL8821CEProbe::start(IOService *provider)
     setProperty("PowerExecutorV2BusMasteringRequired", false);
     setProperty("PowerExecutorV2DMAAddressProgrammingAuthorized", false);
     setProperty("PowerExecutorV2FirmwareUploadAuthorized", false);
-    setProperty("FirmwareUploadAttempted", false);
-    setProperty("DMAConfigurationAttempted", false);
+    setProperty("FirmwareUploadAttempted",
+                firstDMEMTransportJournalCount != 0);
+    setProperty("DMAConfigurationAttempted",
+                firstDMEMTransportJournalCount != 0);
     setProperty("InterruptConfigurationAttempted", false);
     setProperty("AutomaticPowerOffAttempted", false);
     setProperty("PreSystemSnapshotStable", preSystemStable);
@@ -5063,13 +6794,129 @@ bool RTL8821CEProbe::start(IOService *provider)
     setProperty("QueueConfigurationPlanValid",
                 queuePlanValid && trxDevicePlanValid);
     setProperty("QueueConfigurationCommandCount", static_cast<UInt64>(4), 8);
-    setProperty("QueueConfigurationExecutionAuthorized", false);
-    setProperty("QueueConfigurationExecutionAttempted", false);
+    setProperty("QueueConfigurationExecutionAuthorized", queueExecutorArmed);
+    setProperty("QueueConfigurationExecutionAttempted",
+                queueExecutionJournalCount != 0);
     setProperty("QueueConfigurationBlocker",
                 "GlobalRWPTRClearRequiresCompleteTRXRings");
     setProperty("QueueConfigurationRequiresBusMastering", true);
     setProperty("QueueConfigurationRequiresPoweredMAC", true);
     setProperty("QueueConfigurationGlobalResetAffectsAllQueues", true);
+    setProperty("QueueExecutorResult",
+                queueExecutorResultName(queueExecutorResult));
+    setProperty("QueueExecutorJournalRecordCount",
+                static_cast<UInt64>(queueExecutionJournalCount), 8);
+    setProperty("QueueExecutorCompletedWriteCount", queueCompletedWrites, 8);
+    setProperty("QueueExecutorFailedStep", queueFailedStep, 8);
+    setProperty("QueueExecutorSynchronizedRingCount",
+                queueSynchronizedRingCount, 8);
+    setProperty("QueueExecutorCommandReadbackCount",
+                queueCommandReadbackCount, 8);
+    setProperty("QueueExecutorRWPTRCommandReadbackCount",
+                queueRWPTRCommandReadbackCount, 8);
+    setProperty("QueueExecutorH2CCommandReadbackCount",
+                queueH2CCommandReadbackCount, 8);
+    setProperty("QueueExecutorRWPTRClearExpectedReadback",
+                static_cast<UInt64>(0), 32);
+    setProperty("QueueExecutorH2CClearExpectedReadback",
+                static_cast<UInt64>(0), 32);
+    setProperty("QueueExecutorDMAControlObserved",
+                queueDMAControlObserved, 32);
+    setProperty("QueueExecutorCommandReadbackContractValid",
+                validateQueueCommandReadbackContract(
+                    trxDevicePlan, trxDevicePlanCount));
+    setProperty("QueueExecutorBMEEnabled", false);
+    setProperty("QueueExecutorFirmwareUploadAuthorized", false);
+    setProperty("QueueExecutorIDDMAAuthorized", false);
+    setProperty("QueueExecutorInterruptAuthorized", false);
+    setProperty("FirmwareSetupExecutorResult",
+                firmwareSetupExecutorResultName(firmwareSetupExecutorResult));
+    setProperty("FirmwareSetupExecutorExecutionAttempted",
+                firmwareSetupExecutionJournalCount != 0);
+    setProperty("FirmwareSetupExecutorJournalRecordCount",
+                static_cast<UInt64>(firmwareSetupExecutionJournalCount), 8);
+    setProperty("FirmwareSetupExecutorCompletedWriteCount",
+                firmwareSetupCompletedWrites, 8);
+    setProperty("FirmwareSetupExecutorCompletedPollCount",
+                firmwareSetupCompletedPolls, 8);
+    setProperty("FirmwareSetupExecutorCompletedRestoreCount",
+                firmwareSetupCompletedRestores, 8);
+    setProperty("FirmwareSetupExecutorSetupSelfClearCount",
+                firmwareSetupSetupSelfClearCount, 8);
+    setProperty("FirmwareSetupExecutorRestoreSelfClearCount",
+                firmwareSetupRestoreSelfClearCount, 8);
+    setProperty("FirmwareSetupExecutorFailedStep",
+                firmwareSetupFailedStep, 8);
+    setProperty("FirmwareSetupExecutorFirmwareControlAfter",
+                firmwareSetupControlAfter, 16);
+    setProperty("FirmwareSetupExecutorDDMAControlObserved",
+                firmwareSetupDDMAControlObserved, 32);
+    setProperty("FirmwareSetupExecutorRQPNControlAfter",
+                firmwareSetupRQPNControlAfter, 32);
+    setProperty("FirmwareSetupExecutorRQPNSelfClearContractValid",
+                validateFirmwareSetupExecutionContract());
+    setProperty("FirstDMEMExecutorResult",
+                firstDMEMTransportResultName(firstDMEMTransportResult));
+    setProperty("FirstDMEMExecutorExecutionAuthorized", firstDMEMExecutorArmed);
+    setProperty("FirstDMEMExecutorExecutionAttempted",
+                firstDMEMTransportJournalCount != 0);
+    setProperty("FirstDMEMExecutorJournalRecordCount",
+                static_cast<UInt64>(firstDMEMTransportJournalCount), 8);
+    setProperty("FirstDMEMExecutorJournalCapacity",
+                static_cast<UInt64>(kFirstDMEMTransportJournalCapacity), 8);
+    setProperty("FirstDMEMExecutorJournalSeparate", true);
+    setProperty("FirstDMEMExecutorJournalIntentRequiredBeforeEffect", true);
+    setProperty("FirstDMEMExecutorFailedOperation",
+                firstDMEMTransportStatus.failedOperation, 8);
+    setProperty("FirstDMEMExecutorCompletedOperationCount",
+                firstDMEMTransportStatus.completedOperations, 8);
+    setProperty("FirstDMEMExecutorPCICommandOriginal",
+                firstDMEMTransportStatus.pciCommandOriginal, 16);
+    setProperty("FirstDMEMExecutorPCICommandBME",
+                firstDMEMTransportStatus.pciCommandBME, 16);
+    setProperty("FirstDMEMExecutorPCICommandRestored",
+                firstDMEMTransportStatus.pciCommandRestored, 16);
+    setProperty("FirstDMEMExecutorBMEEnableCount",
+                firstDMEMTransportStatus.bmeEnableCount, 8);
+    setProperty("FirstDMEMExecutorBMERestoreAttemptCount",
+                firstDMEMTransportStatus.bmeRestoreAttemptCount, 8);
+    setProperty("FirstDMEMExecutorStagingSynchronizeCount",
+                firstDMEMTransportStatus.stagingSynchronizeCount, 8);
+    setProperty("FirstDMEMExecutorRingOutSynchronizeCount",
+                firstDMEMTransportStatus.ringOutSynchronizeCount, 8);
+    setProperty("FirstDMEMExecutorRingInSynchronizeCount",
+                firstDMEMTransportStatus.ringInSynchronizeCount, 8);
+    setProperty("FirstDMEMExecutorDoorbellWriteCount",
+                firstDMEMTransportStatus.doorbellWriteCount, 8);
+    setProperty("FirstDMEMExecutorDoorbellBefore",
+                firstDMEMTransportStatus.doorbellBefore, 8);
+    setProperty("FirstDMEMExecutorDoorbellAfter",
+                firstDMEMTransportStatus.doorbellAfter, 8);
+    setProperty("FirstDMEMExecutorBeaconPollCount",
+                firstDMEMTransportStatus.beaconPollCount, 16);
+    setProperty("FirstDMEMExecutorIDDMAPrePollCount",
+                firstDMEMTransportStatus.iddmaPrePollCount, 16);
+    setProperty("FirstDMEMExecutorIDDMACompletionPollCount",
+                firstDMEMTransportStatus.iddmaCompletionPollCount, 16);
+    setProperty("FirstDMEMExecutorIDDMAWriteCount",
+                firstDMEMTransportStatus.iddmaWriteCount, 8);
+    setProperty("FirstDMEMExecutorChecksumResetCount",
+                firstDMEMTransportStatus.checksumResetCount, 8);
+    setProperty("FirstDMEMExecutorChecksumStatus",
+                firstDMEMTransportStatus.checksumStatus, 32);
+    setProperty("FirstDMEMExecutorChecksumRequired", false);
+    setProperty("FirstDMEMExecutorDMEMOKBitsWritten", false);
+    setProperty("FirstDMEMExecutorCumulativeHazards",
+                firstDMEMTransportStatus.cumulativeHazards, 32);
+    setProperty("FirstDMEMExecutorBeaconCompletionSignal",
+                "DoorbellBit4SelfClear");
+    setProperty("FirstDMEMExecutorDoorbellSelfClearRequired", true);
+    setProperty("FirstDMEMExecutorDescriptorOWNWritebackRequired", false);
+    setProperty("FirstDMEMExecutorCPUReleaseAuthorized", false);
+    setProperty("FirstDMEMExecutorInterruptAuthorized", false);
+    setProperty("FirstDMEMExecutorRetryAuthorized", false);
+    setProperty("FirstDMEMExecutorPowerOffRecoveryAuthorized", false);
+    setProperty("FirstDMEMExecutorFailureRecovery", "ColdPowerRemoval");
     setProperty("QueuePCICtrl3Original", queueSnapshot.pciControl3, 8);
     setProperty("QueueBeaconRingBaseOriginal", queueSnapshot.beaconRingBase, 32);
     setProperty("QueueBeaconRingBaseProjected", retainedBeaconRingAddress, 32);
@@ -5257,11 +7104,15 @@ bool RTL8821CEProbe::start(IOService *provider)
     setProperty("FirmwareRegisterBaselineAllStable",
                 firmwareRegisterBaselineStableCount ==
                     kFirmwareRegisterBaselineCount);
-    setProperty("FirmwareIDDMAExecutionAuthorized", false);
-    setProperty("FirmwareIDDMAExecutionAttempted", false);
-    setProperty("FirmwareIDDMASourceWritten", false);
-    setProperty("FirmwareIDDMADestinationWritten", false);
-    setProperty("FirmwareIDDMAControlWritten", false);
+    setProperty("FirmwareIDDMAExecutionAuthorized", firstDMEMExecutorArmed);
+    setProperty("FirmwareIDDMAExecutionAttempted",
+                firstDMEMTransportStatus.iddmaWriteCount != 0);
+    setProperty("FirmwareIDDMASourceWritten",
+                firstDMEMTransportStatus.iddmaWriteCount >= 2);
+    setProperty("FirmwareIDDMADestinationWritten",
+                firstDMEMTransportStatus.iddmaWriteCount >= 3);
+    setProperty("FirmwareIDDMAControlWritten",
+                firstDMEMTransportStatus.iddmaWriteCount >= 4);
     setProperty("TRXAllocationPCICommandBefore",
                 trxAllocationPCICommandBefore, 16);
     setProperty("TRXAllocationPCICommandAfter",
@@ -5333,6 +7184,22 @@ bool RTL8821CEProbe::start(IOService *provider)
     if (postPowerPlanData) {
         setProperty("PostPowerSystemPlan", postPowerPlanData);
         postPowerPlanData->release();
+    }
+
+    OSData *postPowerExecutionContractData = OSData::withBytes(
+        kPostPowerExecutionContract, sizeof(kPostPowerExecutionContract));
+    if (postPowerExecutionContractData) {
+        setProperty("PostPowerExecutionContract",
+                    postPowerExecutionContractData);
+        postPowerExecutionContractData->release();
+    }
+
+    OSData *postPowerSimulationData = OSData::withBytes(
+        &postPowerSimulation, sizeof(postPowerSimulation));
+    if (postPowerSimulationData) {
+        setProperty("PostPowerExecutionSimulationSummary",
+                    postPowerSimulationData);
+        postPowerSimulationData->release();
     }
 
     OSData *firmwareSetupPlanData = OSData::withBytes(
@@ -5488,6 +7355,67 @@ bool RTL8821CEProbe::start(IOService *provider)
     if (powerExecutionJournalData) {
         setProperty("PowerExecutorV2Journal", powerExecutionJournalData);
         powerExecutionJournalData->release();
+    }
+
+    OSData *postPowerSnapshotData = OSData::withBytes(
+        postPowerSnapshot, sizeof(postPowerSnapshot));
+    if (postPowerSnapshotData) {
+        setProperty("PostPowerSnapshot", postPowerSnapshotData);
+        postPowerSnapshotData->release();
+    }
+
+    OSData *postPowerExecutionJournalData = OSData::withBytes(
+        postPowerExecutionJournal,
+        static_cast<unsigned int>(postPowerExecutionJournalCount *
+                                  sizeof(postPowerExecutionJournal[0])));
+    if (postPowerExecutionJournalData) {
+        setProperty("PostPowerExecutorJournal",
+                    postPowerExecutionJournalData);
+        postPowerExecutionJournalData->release();
+    }
+
+    OSData *queueExecutionJournalData = OSData::withBytes(
+        queueExecutionJournal,
+        static_cast<unsigned int>(queueExecutionJournalCount *
+                                  sizeof(queueExecutionJournal[0])));
+    if (queueExecutionJournalData) {
+        setProperty("QueueExecutorJournal", queueExecutionJournalData);
+        queueExecutionJournalData->release();
+    }
+
+    OSData *firmwareSetupExecutionJournalData = OSData::withBytes(
+        firmwareSetupExecutionJournal,
+        static_cast<unsigned int>(firmwareSetupExecutionJournalCount *
+                                  sizeof(firmwareSetupExecutionJournal[0])));
+    if (firmwareSetupExecutionJournalData) {
+        setProperty("FirmwareSetupExecutorJournal",
+                    firmwareSetupExecutionJournalData);
+        firmwareSetupExecutionJournalData->release();
+    }
+
+    OSData *firmwareSetupExecutionContractData = OSData::withBytes(
+        kFirmwareSetupExecutionContract,
+        sizeof(kFirmwareSetupExecutionContract));
+    if (firmwareSetupExecutionContractData) {
+        setProperty("FirmwareSetupExecutionContract",
+                    firmwareSetupExecutionContractData);
+        firmwareSetupExecutionContractData->release();
+    }
+
+    OSData *firstDMEMTransportJournalData = OSData::withBytes(
+        firstDMEMTransportJournal,
+        static_cast<unsigned int>(firstDMEMTransportJournalCount *
+                                  sizeof(firstDMEMTransportJournal[0])));
+    if (firstDMEMTransportJournalData) {
+        setProperty("FirstDMEMExecutorJournal", firstDMEMTransportJournalData);
+        firstDMEMTransportJournalData->release();
+    }
+
+    OSData *firstDMEMTransportStatusData = OSData::withBytes(
+        &firstDMEMTransportStatus, sizeof(firstDMEMTransportStatus));
+    if (firstDMEMTransportStatusData) {
+        setProperty("FirstDMEMExecutorStatus", firstDMEMTransportStatusData);
+        firstDMEMTransportStatusData->release();
     }
 
     OSData *queueSnapshotData = OSData::withBytes(
